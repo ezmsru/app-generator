@@ -433,7 +433,7 @@ register-in-dsl:
     DSL_TARGET_BRANCH: "master"
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
-    - apk add --no-cache git python3 py3-yaml
+    - apk add --no-cache git python3 py3-ruamel.yaml
     - git config --global user.email "it-reporting-deployment-devops@megafon.ru"
     - git config --global user.name "CICD Generator"
   script:
@@ -449,11 +449,14 @@ register-in-dsl:
 
       python3 - <<PYEOF
       from pathlib import Path
-      import yaml
+      from ruamel.yaml import YAML
+      from ruamel.yaml.scalarstring import DoubleQuotedScalarString as DQ
 
-      class IndentDumper(yaml.SafeDumper):
-          def increase_indent(self, flow=False, indentless=False):
-              return super().increase_indent(flow, False)
+      yaml = YAML()
+      yaml.preserve_quotes = True
+      yaml.explicit_start = True
+      yaml.width = 4096
+      yaml.indent(mapping=2, sequence=4, offset=2)
 
       path = Path("${DSL_FILE}")
       service = "${PROJECT_NAME}"
@@ -463,23 +466,24 @@ register-in-dsl:
       env_map = {"dev": dev_stands, "preprod": dev_stands, "prod": prod_stands}
 
       entry = {
-          "name": service,
-          "deploy_type": "helm",
-          "pipeline": "cicd",
-          "conf": {"helm": {env: env_map.get(env, []) for env in stands}},
+          "name": DQ(service),
+          "deploy_type": DQ("helm"),
+          "pipeline": DQ("cicd"),
+          "conf": {"helm": {env: [DQ(s) for s in env_map.get(env, [])] for env in stands}},
       }
 
-      data = yaml.safe_load(path.read_text()) if path.exists() else {}
-      data = data or {}
+      if path.exists():
+          with path.open() as f:
+              data = yaml.load(f) or {}
+      else:
+          data = {}
       products = [p for p in (data.get("products") or []) if p.get("name") != service]
       products.append(entry)
       data["products"] = products
       data.setdefault("conf", {}).setdefault("parameters", {}).setdefault("FORCE", False)
 
       with path.open("w") as f:
-          f.write("---\n")
-          yaml.dump(data, f, Dumper=IndentDumper, default_flow_style=False,
-                    sort_keys=False, allow_unicode=True, indent=2)
+          yaml.dump(data, f)
       PYEOF
 
       git add "${DSL_FILE}"
