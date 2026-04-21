@@ -426,7 +426,7 @@ register-in-dsl:
   variables:
     DSL_REPO_PATH: "libs/cicd/nmf/nmf-job-dsl"
     DSL_FILE_DIR: "middle/itbigdata"
-    DSL_BRANCH: "master"
+    DSL_TARGET_BRANCH: "master"
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache git python3 py3-yaml
@@ -435,9 +435,11 @@ register-in-dsl:
   script:
     - |
       PRODUCT="${PRODUCT_NAME:-$PROJECT_NAME}"
-      git clone --branch "${DSL_BRANCH}" \
-        "https://oauth2:${GITLAB_TUZ_TOKEN}@cicd-git.megafon.ru/${DSL_REPO_PATH}.git" dsl-repo
+      FEATURE_BRANCH="feature/${PROJECT_NAME}"
+      git clone --branch "${DSL_TARGET_BRANCH}" \
+        "https://${UNIXREPO_USER}:${UNIXREPO_API_TOKEN}@cicd-git.megafon.ru/${DSL_REPO_PATH}.git" dsl-repo
       cd dsl-repo
+      git checkout -b "${FEATURE_BRANCH}"
       mkdir -p "${DSL_FILE_DIR}"
       DSL_FILE="${DSL_FILE_DIR}/${PRODUCT}.yaml"
 
@@ -473,8 +475,15 @@ register-in-dsl:
 
       git add "${DSL_FILE}"
       if git diff --cached --quiet; then
-        echo "Нет изменений в ${DSL_FILE}"
-      else
-        git commit -m "feat: register ${PROJECT_NAME} in job-dsl"
-        git push origin "${DSL_BRANCH}"
+        echo "Нет изменений в ${DSL_FILE} — MR не требуется"
+        exit 0
       fi
+
+      git commit -m "feat: register ${PROJECT_NAME} in job-dsl"
+      git push \
+        -o merge_request.create \
+        -o merge_request.target="${DSL_TARGET_BRANCH}" \
+        -o merge_request.merge_when_pipeline_succeeds \
+        -o merge_request.remove_source_branch \
+        -o merge_request.title="feat: register ${PROJECT_NAME} in job-dsl" \
+        origin "${FEATURE_BRANCH}"
