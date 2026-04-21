@@ -20,12 +20,12 @@ variables:
   CI_IMAGE: "mf-ubi-target-docker-local.unixrepo.megafon.ru/alpine:3.22"
   # --- Параметры, заполняемые разработчиком при Run Pipeline ---
   TARGET_GROUP_NAME:
-    description: "Группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (создастся, если нет)"
+    description: "**Группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (создастся, если нет)**"
     value: "cicdbigdata"
   PROJECT_NAME:
-    description: "Имя нового репозитория (латиница, без пробелов)"
+    description: "**Имя нового репозитория (латиница, без пробелов)**"
   TEMPLATE_TYPE:
-    description: "Тип шаблона приложения"
+    description: "**Тип шаблона приложения**"
     value: "python-fastapi"
     options:
       - "python-fastapi"
@@ -34,55 +34,59 @@ variables:
       - "java"
       - "node"
   DEPLOY_STANDS:
-    description: "Стенды деплоя (через запятую)"
+    description: "**Стенды деплоя (через запятую)**"
     value: "dev"
     options:
       - "dev"
       - "dev,preprod"
       - "dev,preprod,prod"
+  # --- PAM ---
+  PAM_SOURCE:
+    description: "**Путь до секретов /MegaFon/Common/Data-Analytics/dev/<1 уровень>/<2 уровень(наименование ИС)>/; Например: LLM/cost_scan**"
+    value: ""
   # --- Базы данных ---
   PG_ENABLED:
-    description: "Подключить PostgreSQL"
+    description: "**Подключить PostgreSQL**"
     value: "false"
     options: ["true", "false"]
   PG_HOST:
-    description: "PostgreSQL host"
+    description: "**PostgreSQL host**"
     value: ""
   PG_DB:
-    description: "PostgreSQL database"
+    description: "**PostgreSQL database**"
     value: ""
   CH_ENABLED:
-    description: "Подключить ClickHouse"
+    description: "**Подключить ClickHouse**"
     value: "false"
     options: ["true", "false"]
   CH_HOST:
-    description: "ClickHouse host"
+    description: "**ClickHouse host**"
     value: ""
   CH_DB:
-    description: "ClickHouse database"
+    description: "**ClickHouse database**"
     value: ""
   REDIS_ENABLED:
-    description: "Подключить Redis"
+    description: "**Подключить Redis**"
     value: "false"
     options: ["true", "false"]
   REDIS_HOST:
     description: "Redis host"
     value: ""
   CORE_REPO_PATH:
-    description: "Путь к core-registry (group/project, пусто — не регистрировать)"
+    description: "**Путь к core-registry (group/project, пусто — не регистрировать)**"
     value: ""
   PRODUCT_NAME:
-    description: "Имя продукта для job-dsl (пусто — взять PROJECT_NAME)"
+    description: "**Имя продукта для job-dsl (пусто — взять PROJECT_NAME)**"
     value: ""
   HELM_STANDS_DEV:
-    description: "DC-стенды для dev/preprod (через запятую)"
+    description: "**Cтенды для dev/preprod (через запятую)**"
     value: "vlg-t2-dc-s"
     options:
       - "vlg-t2-dc-s"
       - "vlg-t2-dc-l"
       - "vlg-t2-dc-s,vlg-t2-dc-l"
   HELM_STANDS_PROD:
-    description: "DC-стенды для prod (через запятую)"
+    description: "**Cтенды для prod (через запятую)**"
     value: "msk-p1-dm-gen"
     options:
       - "msk-p1-dm-gen"
@@ -430,14 +434,14 @@ register-in-dsl:
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache git python3 py3-yaml
-    - git config --global user.email "cicd-generator@megafon.ru"
+    - git config --global user.email "it-reporting-deployment-devops@megafon.ru"
     - git config --global user.name "CICD Generator"
   script:
     - |
-      PRODUCT="${PRODUCT_NAME:-$PROJECT_NAME}"
+      PRODUCT="${PRODUCT_NAME:-$TARGET_GROUP_NAME}"
       FEATURE_BRANCH="feature/${PROJECT_NAME}"
       git clone --branch "${DSL_TARGET_BRANCH}" \
-        "https://${UNIXREPO_USER}:${UNIXREPO_API_TOKEN}@cicd-git.megafon.ru/${DSL_REPO_PATH}.git" dsl-repo
+        "https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/${DSL_REPO_PATH}.git" dsl-repo
       cd dsl-repo
       git checkout -b "${FEATURE_BRANCH}"
       mkdir -p "${DSL_FILE_DIR}"
