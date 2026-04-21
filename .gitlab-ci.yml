@@ -455,11 +455,6 @@ register-in-dsl:
           def increase_indent(self, flow=False, indentless=False):
               return super().increase_indent(flow, False)
 
-      def _quoted_str(dumper, data):
-          return dumper.represent_scalar("tag:yaml.org,2002:str", data, style='"')
-
-      IndentDumper.add_representer(str, _quoted_str)
-
       path = Path("${DSL_FILE}")
       service = "${PROJECT_NAME}"
       stands = [s.strip() for s in "${DEPLOY_STANDS}".split(",") if s.strip()]
