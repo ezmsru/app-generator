@@ -112,17 +112,25 @@ validate-params:
       done
 
       # --- Резолв/создание целевых групп: middle + middleconf ---
+      # middle и middleconf — независимые root-группы с разными ТУЗами
       for PARENT in middle middleconf; do
         PARENT_PATH="${PARENT}/itbigdata"
         GROUP_PATH="${PARENT_PATH}/${TARGET_GROUP_NAME}"
         ENCODED=$(echo "$GROUP_PATH" | sed 's|/|%2F|g')
 
-        GROUP_ID=$(curl -s --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+        if [ "$PARENT" = "middleconf" ]; then
+          TOKEN="${GITLAB_MIDDLECONF_TUZ_TOKEN}"
+        else
+          TOKEN="${GITLAB_TUZ_TOKEN}"
+        fi
+        [ -z "$TOKEN" ] && echo "ERROR: пустой токен для ${PARENT}" && exit 1
+
+        GROUP_ID=$(curl -s --header "PRIVATE-TOKEN: ${TOKEN}" \
           "${GITLAB_URL}/api/v4/groups/${ENCODED}" | jq -r '.id // empty')
 
         if [ -z "$GROUP_ID" ]; then
           PARENT_ENCODED=$(echo "$PARENT_PATH" | sed 's|/|%2F|g')
-          PARENT_RESP=$(curl -s -w "\n%{http_code}" --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+          PARENT_RESP=$(curl -s -w "\n%{http_code}" --header "PRIVATE-TOKEN: ${TOKEN}" \
             "${GITLAB_URL}/api/v4/groups/${PARENT_ENCODED}")
           PARENT_CODE=$(echo "$PARENT_RESP" | tail -n1)
           PARENT_BODY=$(echo "$PARENT_RESP" | sed '$d')
@@ -135,7 +143,7 @@ validate-params:
           fi
 
           CREATE=$(curl -s --request POST \
-            --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+            --header "PRIVATE-TOKEN: ${TOKEN}" \
             --header "Content-Type: application/json" \
             --data "{\"name\": \"${TARGET_GROUP_NAME}\", \"path\": \"${TARGET_GROUP_NAME}\", \"parent_id\": ${PARENT_ID}, \"visibility\": \"internal\"}" \
             "${GITLAB_URL}/api/v4/groups")
@@ -151,7 +159,7 @@ validate-params:
         # Проверка что проект не существует
         ENCODED_PATH=$(echo "${GROUP_PATH}/${PROJECT_NAME}" | sed 's|/|%2F|g')
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-          --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+          --header "PRIVATE-TOKEN: ${TOKEN}" \
           "${GITLAB_URL}/api/v4/projects/${ENCODED_PATH}")
 
         if [ "$HTTP_CODE" = "200" ]; then
@@ -179,9 +187,9 @@ create-repo:
   script:
     - |
       create_project() {
-        local NS_ID="$1"; local DESC="$2"
+        local NS_ID="$1"; local DESC="$2"; local TOKEN="$3"
         curl -s --request POST \
-          --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+          --header "PRIVATE-TOKEN: ${TOKEN}" \
           --header "Content-Type: application/json" \
           --data "{
             \"name\": \"${PROJECT_NAME}\",
@@ -194,14 +202,14 @@ create-repo:
           "${GITLAB_URL}/api/v4/projects"
       }
 
-      R1=$(create_project "${MIDDLE_GROUP_ID}" "${TEMPLATE_TYPE} service (app)")
+      R1=$(create_project "${MIDDLE_GROUP_ID}" "${TEMPLATE_TYPE} service (app)" "${GITLAB_TUZ_TOKEN}")
       MIDDLE_PROJECT_ID=$(echo "$R1" | jq -r '.id')
       MIDDLE_PROJECT_WEB=$(echo "$R1" | jq -r '.web_url')
       if [ "$MIDDLE_PROJECT_ID" = "null" ] || [ -z "$MIDDLE_PROJECT_ID" ]; then
         echo "ERROR создания middle:"; echo "$R1" | jq .; exit 1
       fi
 
-      R2=$(create_project "${MIDDLECONF_GROUP_ID}" "${TEMPLATE_TYPE} service (config)")
+      R2=$(create_project "${MIDDLECONF_GROUP_ID}" "${TEMPLATE_TYPE} service (config)" "${GITLAB_MIDDLECONF_TUZ_TOKEN}")
       MIDDLECONF_PROJECT_ID=$(echo "$R2" | jq -r '.id')
       MIDDLECONF_PROJECT_WEB=$(echo "$R2" | jq -r '.web_url')
       if [ "$MIDDLECONF_PROJECT_ID" = "null" ] || [ -z "$MIDDLECONF_PROJECT_ID" ]; then
@@ -269,7 +277,7 @@ fill-config:
     - git config --global user.name "CICD Generator"
   script:
     - |
-      git clone "https://oauth2:${GITLAB_TUZ_TOKEN}@cicd-git.megafon.ru/${MIDDLECONF_GROUP_PATH}/${PROJECT_NAME}.git" new-project
+      git clone "https://oauth2:${GITLAB_MIDDLECONF_TUZ_TOKEN}@cicd-git.megafon.ru/${MIDDLECONF_GROUP_PATH}/${PROJECT_NAME}.git" new-project
 
       # Dockerfile
       cp "middleconf/${TEMPLATE_TYPE}/Dockerfile" new-project/Dockerfile
@@ -349,10 +357,11 @@ setup-webhook:
     - apk add --no-cache curl jq
   script:
     - |
-      for PID in "${MIDDLE_PROJECT_ID}" "${MIDDLECONF_PROJECT_ID}"; do
+      set_webhook() {
+        local PID="$1"; local TOKEN="$2"
         echo "=== webhook → project ${PID} ==="
         curl -s --request POST \
-          --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+          --header "PRIVATE-TOKEN: ${TOKEN}" \
           --header "Content-Type: application/json" \
           --data "{
             \"url\": \"${WEBHOOK_URL}\",
@@ -362,7 +371,10 @@ setup-webhook:
             \"enable_ssl_verification\": true
           }" \
           "${GITLAB_URL}/api/v4/projects/${PID}/hooks" | jq .
-      done
+      }
+
+      set_webhook "${MIDDLE_PROJECT_ID}"     "${GITLAB_TUZ_TOKEN}"
+      set_webhook "${MIDDLECONF_PROJECT_ID}" "${GITLAB_MIDDLECONF_TUZ_TOKEN}"
 
 
 register-in-core:

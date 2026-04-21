@@ -35,7 +35,8 @@ generator/
 
 | Переменная | Тип | Описание |
 |---|---|---|
-| `GITLAB_TUZ_TOKEN` | Masked, Protected | Токен ТУЗа со скоупами `api`, `write_repository` |
+| `GITLAB_TUZ_TOKEN` | Masked, Protected | Токен ТУЗа для `middle/itbigdata` (скоупы `api`, `write_repository`) |
+| `GITLAB_MIDDLECONF_TUZ_TOKEN` | Masked, Protected | Токен ТУЗа для `middleconf/itbigdata` (скоупы `api`, `write_repository`) |
 
 ## Запуск
 
