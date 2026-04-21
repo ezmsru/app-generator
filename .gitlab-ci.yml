@@ -451,6 +451,10 @@ register-in-dsl:
       from pathlib import Path
       import yaml
 
+      class IndentDumper(yaml.SafeDumper):
+          def increase_indent(self, flow=False, indentless=False):
+              return super().increase_indent(flow, False)
+
       path = Path("${DSL_FILE}")
       service = "${PROJECT_NAME}"
       stands = [s.strip() for s in "${DEPLOY_STANDS}".split(",") if s.strip()]
@@ -474,7 +478,8 @@ register-in-dsl:
 
       with path.open("w") as f:
           f.write("---\n")
-          yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+          yaml.dump(data, f, Dumper=IndentDumper, default_flow_style=False,
+                    sort_keys=False, allow_unicode=True, indent=2)
       PYEOF
 
       git add "${DSL_FILE}"
