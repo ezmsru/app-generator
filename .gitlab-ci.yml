@@ -2,6 +2,10 @@ include:
   - project: 'middle/itbigdata/devops_tools/gitlab-templates'
     file: 'templates/unixrepo-auth.yml'
 
+default:
+  tags:
+    - docker-abd
+
 stages:
   - validate
   - create-repo
