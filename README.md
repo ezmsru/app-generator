@@ -22,9 +22,10 @@ generator/
     └── helm-base/           # Helm chart (общий)
         ├── Chart.yaml
         ├── values.yaml
-        ├── values-dev.yaml
-        ├── values-preprod.yaml
-        ├── values-prod.yaml
+        ├── vlg-t2-dc-s-values.yaml      # DC-стенд (dev)
+        ├── vlg-t2-dc-l-values.yaml      # DC-стенд (preprod)
+        ├── msk-p1-dm-gen-values.yaml    # DC-стенд (prod)
+        ├── msk-p1-kb-gen-values.yaml    # DC-стенд (prod-реплика)
         └── templates/
 ```
 
@@ -44,7 +45,7 @@ generator/
 - `PROJECT_NAME` — имя нового проекта (создаётся по одному репо в каждой из двух групп)
 - `TEMPLATE_TYPE` — тип шаблона (python-fastapi / python-flask / python-gunicorn / java / node)
 - `DEPLOY_STANDS` — стенды (dev / dev,preprod / dev,preprod,prod)
-- `HELM_STANDS_DEV`, `HELM_STANDS_PROD` — DC-стенды для helm (comma-separated)
+- `HELM_STANDS_DEV`, `HELM_STANDS_PROD` — DC-стенды для helm (comma-separated), допустимые значения: `vlg-t2-dc-s`, `vlg-t2-dc-l`, `msk-p1-dm-gen`, `msk-p1-kb-gen`
 - `PG_ENABLED`, `PG_HOST`, `PG_DB` — PostgreSQL
 - `CH_ENABLED`, `CH_HOST`, `CH_DB` — ClickHouse
 - `REDIS_ENABLED`, `REDIS_HOST` — Redis
@@ -56,6 +57,6 @@ generator/
 1. **validate** — проверка имени, резолв/создание обеих групп (`middle/itbigdata/<group>` и `middleconf/itbigdata/<group>`), проверка что проект не существует ни в одной
 2. **create-repo** — создание **двух** репозиториев: app в `middle/...` и config в `middleconf/...`
 3. **fill-template** — копирование шаблона из `middle/<template>/` в **middle-репозиторий** (приложение)
-4. **fill-config** — Dockerfile + Helm chart из `middleconf/` в **middleconf-репозиторий** (конфигурация)
+4. **fill-config** — Dockerfile + Helm chart из `middleconf/` в **middleconf-репозиторий** (конфигурация); копируются только те `<dc>-values.yaml`, которые перечислены в `HELM_STANDS_DEV`/`HELM_STANDS_PROD` для выбранных сред
 5. **setup-webhook** — webhook на оба репозитория (если указан `WEBHOOK_URL`)
 6. **register** — запись в `services.yaml` ядра: `repo_url` = middle, `config_repo_url` = middleconf (если указан `CORE_REPO_PATH`)
