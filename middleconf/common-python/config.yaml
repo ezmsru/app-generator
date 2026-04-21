@@ -1,0 +1,7 @@
+configuration:
+  sources:
+    language: "python"
+    buildpack: "https://unixrepo.megafon.ru/artifactory/generic-middle-dev-local/microservices/infra/buildpacks/python/buildpack-python312-debian/buildpack-python312-debian-latest.tgz"
+    build_image: "docker-middle-dev-local.unixrepo.megafon.ru/microservices/infra/build/python/docker-python312-debian:latest"
+
+  exclude: ["staticAnalyzer"]

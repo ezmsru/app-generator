@@ -1,0 +1,11 @@
+{{- include "mfactorylib.default.deployment.tpl" . | nindent 0 }}
+{{- include "mfactorylib.default.destinationRule.tpl" . | nindent 0 }}
+{{- include "mfactorylib.default.gateway.tpl" . | nindent 0 }}
+{{- include "mfactorylib.default.rollout.tpl" . | nindent 0 }}
+{{- include "mfactorylib.default.service.tpl" . | nindent 0 }}
+{{- include "mfactorylib.default.pdb.tpl" . | nindent 0 }}
+{{- include "mfactorylib.default.vs.tpl" . | nindent 0 }}
+{{- include "mfactorylib.default.sa.tpl" . | nindent 0 }}
+{{- include "mfactorylib.default.sm.tpl" . | nindent 0 }}
+{{- include "mfactorylib.default.exsec.tpl" . | nindent 0 }}
+{{- include "mfactorylib.default.secstore.tpl" . | nindent 0 }}

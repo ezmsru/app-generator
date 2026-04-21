@@ -1,0 +1,11 @@
+apiVersion: v2
+name: {{PROJECT_NAME}}
+description: Helm chart for {{PROJECT_NAME}}
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+dependencies:
+  - name: mfactorylib
+    version: ">=1.0.0"
+    repository: "https://unixrepo.megafon.ru/artifactory/helm-middle-dev-local"

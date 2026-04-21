@@ -1,0 +1,453 @@
+include:
+  - project: 'middle/itbigdata/devops_tools/gitlab-templates'
+    file: 'templates/unixrepo-auth.yml'
+
+stages:
+  - validate
+  - create-repo
+  - fill-template
+  - fill-config
+  - setup-webhook
+  - register
+  - register-dsl
+
+variables:
+  GITLAB_URL: "https://cicd-git.megafon.ru"
+  CI_IMAGE: "$ITBIGDATA_URL_UNIXREPO/alpine:3.22"
+  # --- Параметры, заполняемые разработчиком при Run Pipeline ---
+  TARGET_GROUP_NAME:
+    description: "Группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (создастся, если нет)"
+    value: "cicdbigdata"
+  PROJECT_NAME:
+    description: "Имя нового репозитория (латиница, без пробелов)"
+  TEMPLATE_TYPE:
+    description: "Тип шаблона приложения"
+    value: "python-fastapi"
+    options:
+      - "python-fastapi"
+      - "python-flask"
+      - "python-gunicorn"
+      - "java"
+      - "node"
+  DEPLOY_STANDS:
+    description: "Стенды деплоя (через запятую)"
+    value: "dev"
+    options:
+      - "dev"
+      - "dev,preprod"
+      - "dev,preprod,prod"
+  # --- Базы данных ---
+  PG_ENABLED:
+    description: "Подключить PostgreSQL"
+    value: "false"
+    options: ["true", "false"]
+  PG_HOST:
+    description: "PostgreSQL host"
+    value: ""
+  PG_DB:
+    description: "PostgreSQL database"
+    value: ""
+  CH_ENABLED:
+    description: "Подключить ClickHouse"
+    value: "false"
+    options: ["true", "false"]
+  CH_HOST:
+    description: "ClickHouse host"
+    value: ""
+  CH_DB:
+    description: "ClickHouse database"
+    value: ""
+  REDIS_ENABLED:
+    description: "Подключить Redis"
+    value: "false"
+    options: ["true", "false"]
+  REDIS_HOST:
+    description: "Redis host"
+    value: ""
+  CORE_REPO_PATH:
+    description: "Путь к core-registry (group/project, пусто — не регистрировать)"
+    value: ""
+  PRODUCT_NAME:
+    description: "Имя продукта для job-dsl (пусто — взять PROJECT_NAME)"
+    value: ""
+  HELM_STANDS_DEV:
+    description: "DC-стенды для dev/preprod (через запятую)"
+    value: "vlg-t2-dc-s"
+    options:
+      - "vlg-t2-dc-s"
+      - "vlg-t2-dc-l"
+      - "vlg-t2-dc-s,vlg-t2-dc-l"
+  HELM_STANDS_PROD:
+    description: "DC-стенды для prod (через запятую)"
+    value: "msk-p1-dm-gen"
+    options:
+      - "msk-p1-dm-gen"
+      - "msk-p1-kb-gen"
+      - "msk-p1-dm-gen,msk-p1-kb-gen"
+
+
+validate-params:
+  stage: validate
+  image: $CI_IMAGE
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache curl jq
+  script:
+    - |
+      echo "=== Валидация параметров ==="
+      [ -z "$PROJECT_NAME" ]      && echo "ERROR: PROJECT_NAME обязателен"      && exit 1
+      [ -z "$TARGET_GROUP_NAME" ] && echo "ERROR: TARGET_GROUP_NAME обязателен" && exit 1
+
+      for v in PROJECT_NAME TARGET_GROUP_NAME; do
+        if ! echo "${!v}" | grep -qE '^[a-z0-9][a-z0-9._-]*$'; then
+          echo "ERROR: ${v}: только a-z, 0-9, ., -, _"; exit 1
+        fi
+      done
+
+      # --- Резолв/создание целевых групп: middle + middleconf ---
+      for PARENT in middle middleconf; do
+        PARENT_PATH="${PARENT}/itbigdata"
+        GROUP_PATH="${PARENT_PATH}/${TARGET_GROUP_NAME}"
+        ENCODED=$(echo "$GROUP_PATH" | sed 's|/|%2F|g')
+
+        GROUP_ID=$(curl -s --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+          "${GITLAB_URL}/api/v4/groups/${ENCODED}" | jq -r '.id // empty')
+
+        if [ -z "$GROUP_ID" ]; then
+          PARENT_ENCODED=$(echo "$PARENT_PATH" | sed 's|/|%2F|g')
+          PARENT_ID=$(curl -s --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+            "${GITLAB_URL}/api/v4/groups/${PARENT_ENCODED}" | jq -r '.id // empty')
+          [ -z "$PARENT_ID" ] && echo "ERROR: родитель ${PARENT_PATH} не найден" && exit 1
+
+          CREATE=$(curl -s --request POST \
+            --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data "{\"name\": \"${TARGET_GROUP_NAME}\", \"path\": \"${TARGET_GROUP_NAME}\", \"parent_id\": ${PARENT_ID}, \"visibility\": \"internal\"}" \
+            "${GITLAB_URL}/api/v4/groups")
+          GROUP_ID=$(echo "$CREATE" | jq -r '.id // empty')
+          if [ -z "$GROUP_ID" ]; then
+            echo "ERROR создания группы ${GROUP_PATH}:"; echo "$CREATE" | jq .; exit 1
+          fi
+          echo "OK: создана группа ${GROUP_PATH} (ID=${GROUP_ID})"
+        else
+          echo "OK: группа ${GROUP_PATH} найдена (ID=${GROUP_ID})"
+        fi
+
+        # Проверка что проект не существует
+        ENCODED_PATH=$(echo "${GROUP_PATH}/${PROJECT_NAME}" | sed 's|/|%2F|g')
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+          --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+          "${GITLAB_URL}/api/v4/projects/${ENCODED_PATH}")
+
+        if [ "$HTTP_CODE" = "200" ]; then
+          echo "ERROR: Проект ${PROJECT_NAME} уже существует в ${GROUP_PATH}"
+          exit 1
+        fi
+
+        UPPER=$(echo "$PARENT" | tr '[:lower:]' '[:upper:]')
+        echo "${UPPER}_GROUP_ID=${GROUP_ID}"     >> group.env
+        echo "${UPPER}_GROUP_PATH=${GROUP_PATH}" >> group.env
+      done
+      echo "OK: валидация пройдена"
+  artifacts:
+    reports:
+      dotenv: group.env
+
+
+create-repo:
+  stage: create-repo
+  image: $CI_IMAGE
+  needs: [validate-params]
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache curl jq
+  script:
+    - |
+      create_project() {
+        local NS_ID="$1"; local DESC="$2"
+        curl -s --request POST \
+          --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+          --header "Content-Type: application/json" \
+          --data "{
+            \"name\": \"${PROJECT_NAME}\",
+            \"namespace_id\": ${NS_ID},
+            \"description\": \"${DESC}\",
+            \"visibility\": \"internal\",
+            \"initialize_with_readme\": true,
+            \"default_branch\": \"main\"
+          }" \
+          "${GITLAB_URL}/api/v4/projects"
+      }
+
+      R1=$(create_project "${MIDDLE_GROUP_ID}" "${TEMPLATE_TYPE} service (app)")
+      MIDDLE_PROJECT_ID=$(echo "$R1" | jq -r '.id')
+      MIDDLE_PROJECT_WEB=$(echo "$R1" | jq -r '.web_url')
+      if [ "$MIDDLE_PROJECT_ID" = "null" ] || [ -z "$MIDDLE_PROJECT_ID" ]; then
+        echo "ERROR создания middle:"; echo "$R1" | jq .; exit 1
+      fi
+
+      R2=$(create_project "${MIDDLECONF_GROUP_ID}" "${TEMPLATE_TYPE} service (config)")
+      MIDDLECONF_PROJECT_ID=$(echo "$R2" | jq -r '.id')
+      MIDDLECONF_PROJECT_WEB=$(echo "$R2" | jq -r '.web_url')
+      if [ "$MIDDLECONF_PROJECT_ID" = "null" ] || [ -z "$MIDDLECONF_PROJECT_ID" ]; then
+        echo "ERROR создания middleconf:"; echo "$R2" | jq .; exit 1
+      fi
+
+      echo "middle     : ID=${MIDDLE_PROJECT_ID} URL=${MIDDLE_PROJECT_WEB}"
+      echo "middleconf : ID=${MIDDLECONF_PROJECT_ID} URL=${MIDDLECONF_PROJECT_WEB}"
+
+      {
+        echo "MIDDLE_PROJECT_ID=${MIDDLE_PROJECT_ID}"
+        echo "MIDDLE_PROJECT_WEB=${MIDDLE_PROJECT_WEB}"
+        echo "MIDDLECONF_PROJECT_ID=${MIDDLECONF_PROJECT_ID}"
+        echo "MIDDLECONF_PROJECT_WEB=${MIDDLECONF_PROJECT_WEB}"
+        echo "MIDDLE_GROUP_PATH=${MIDDLE_GROUP_PATH}"
+        echo "MIDDLECONF_GROUP_PATH=${MIDDLECONF_GROUP_PATH}"
+      } >> create.env
+  artifacts:
+    reports:
+      dotenv: create.env
+
+
+fill-template:
+  stage: fill-template
+  image: $CI_IMAGE
+  needs:
+    - job: create-repo
+      artifacts: true
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache git
+    - git config --global user.email "cicd-generator@megafon.ru"
+    - git config --global user.name "CICD Generator"
+  script:
+    - |
+      TEMPLATE_DIR="middle/${TEMPLATE_TYPE}"
+      [ ! -d "$TEMPLATE_DIR" ] && echo "ERROR: нет шаблона ${TEMPLATE_TYPE}" && exit 1
+
+      git clone "https://oauth2:${GITLAB_TUZ_TOKEN}@cicd-git.megafon.ru/${MIDDLE_GROUP_PATH}/${PROJECT_NAME}.git" new-project
+
+      cp -r "${TEMPLATE_DIR}"/. new-project/
+
+      find new-project/ -type f \( -name "*.py" -o -name "*.java" -o -name "*.js" \
+        -o -name "*.json" -o -name "*.xml" -o -name "*.yml" -o -name "*.yaml" \
+        -o -name "*.txt" -o -name "*.md" \) \
+        -exec sed -i "s/{{PROJECT_NAME}}/${PROJECT_NAME}/g" {} +
+
+      cd new-project
+      git add -A
+      git commit -m "feat: init from ${TEMPLATE_TYPE} template"
+      git push origin main
+
+
+fill-config:
+  stage: fill-config
+  image: $CI_IMAGE
+  needs:
+    - job: create-repo
+      artifacts: true
+    - fill-template
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache git
+    - git config --global user.email "cicd-generator@megafon.ru"
+    - git config --global user.name "CICD Generator"
+  script:
+    - |
+      git clone "https://oauth2:${GITLAB_TUZ_TOKEN}@cicd-git.megafon.ru/${MIDDLECONF_GROUP_PATH}/${PROJECT_NAME}.git" new-project
+
+      # Dockerfile
+      cp "middleconf/${TEMPLATE_TYPE}/Dockerfile" new-project/Dockerfile
+
+      # Python-специфичные общие файлы (entrypoint, config, Makefile)
+      case "${TEMPLATE_TYPE}" in
+        python-*)
+          cp middleconf/common-python/entrypoint.sh new-project/entrypoint.sh
+          cp middleconf/common-python/config.yaml   new-project/config.yaml
+          cp middleconf/common-python/Makefile      new-project/Makefile
+          chmod +x new-project/entrypoint.sh
+          ;;
+      esac
+
+      # Helm chart (mfactorylib)
+      mkdir -p new-project/helm/templates
+      cp middleconf/helm-base/Chart.yaml           new-project/helm/Chart.yaml
+      cp middleconf/helm-base/values.yaml          new-project/helm/values.yaml
+      cp middleconf/helm-base/templates/all.yaml   new-project/helm/templates/all.yaml
+
+      # DC-стенд-специфичные values: собираем уникальный набор стендов,
+      # релевантных выбранным средам DEPLOY_STANDS (dev/preprod → HELM_STANDS_DEV, prod → HELM_STANDS_PROD)
+      DC_LIST=""
+      for env in $(echo "${DEPLOY_STANDS}" | tr ',' ' '); do
+        case "$env" in
+          dev|preprod) SRC="${HELM_STANDS_DEV}" ;;
+          prod)        SRC="${HELM_STANDS_PROD}" ;;
+          *) echo "WARN: неизвестная среда '${env}'"; continue ;;
+        esac
+        DC_LIST="${DC_LIST} $(echo "$SRC" | tr ',' ' ')"
+      done
+      UNIQUE_DCS=$(echo "$DC_LIST" | tr ' ' '\n' | grep -v '^$' | sort -u)
+      for dc in $UNIQUE_DCS; do
+        SRC_FILE="middleconf/helm-base/${dc}-values.yaml"
+        [ ! -f "$SRC_FILE" ] && echo "ERROR: нет values-файла для DC-стенда '${dc}'" && exit 1
+        cp "$SRC_FILE" "new-project/helm/${dc}-values.yaml"
+        echo "OK: скопирован ${dc}-values.yaml"
+      done
+
+      # Порт по типу шаблона
+      case "${TEMPLATE_TYPE}" in
+        java) SERVICE_PORT=8080 ;;
+        node) SERVICE_PORT=3000 ;;
+        *)    SERVICE_PORT=8000 ;;
+      esac
+
+      # Подстановка плейсхолдеров
+      find new-project/helm/ new-project/Dockerfile -type f -exec sed -i \
+        -e "s/{{PROJECT_NAME}}/${PROJECT_NAME}/g" \
+        -e "s/{{SERVICE_PORT}}/${SERVICE_PORT}/g" \
+        -e "s/{{PG_ENABLED}}/${PG_ENABLED}/g" \
+        -e "s/{{PG_HOST}}/${PG_HOST}/g" \
+        -e "s/{{PG_DB}}/${PG_DB}/g" \
+        -e "s/{{REDIS_ENABLED}}/${REDIS_ENABLED}/g" \
+        -e "s/{{REDIS_HOST}}/${REDIS_HOST}/g" \
+        -e "s/{{CH_ENABLED}}/${CH_ENABLED}/g" \
+        -e "s/{{CH_HOST}}/${CH_HOST}/g" \
+        -e "s/{{CH_DB}}/${CH_DB}/g" \
+        {} +
+
+      cd new-project
+      git add -A
+      git commit -m "feat: middleconf (Dockerfile + mfactorylib helm, stands: ${DEPLOY_STANDS})"
+      git push origin main
+
+
+setup-webhook:
+  stage: setup-webhook
+  image: $CI_IMAGE
+  needs:
+    - job: create-repo
+      artifacts: true
+  variables:
+    WEBHOOK_URL: "https://jenkins.middle.megafon.ru/cicd-lib-webhooker/gitlab"
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache curl jq
+  script:
+    - |
+      for PID in "${MIDDLE_PROJECT_ID}" "${MIDDLECONF_PROJECT_ID}"; do
+        echo "=== webhook → project ${PID} ==="
+        curl -s --request POST \
+          --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+          --header "Content-Type: application/json" \
+          --data "{
+            \"url\": \"${WEBHOOK_URL}\",
+            \"push_events\": true,
+            \"merge_requests_events\": true,
+            \"note_events\": true,
+            \"enable_ssl_verification\": true
+          }" \
+          "${GITLAB_URL}/api/v4/projects/${PID}/hooks" | jq .
+      done
+
+
+register-in-core:
+  stage: register
+  image: $CI_IMAGE
+  needs:
+    - job: create-repo
+      artifacts: true
+    - fill-config
+  rules:
+    - if: $CORE_REPO_PATH != ""
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache git
+    - git config --global user.email "cicd-generator@megafon.ru"
+    - git config --global user.name "CICD Generator"
+  script:
+    - |
+      git clone "https://oauth2:${GITLAB_TUZ_TOKEN}@cicd-git.megafon.ru/${CORE_REPO_PATH}.git" core-repo
+      cd core-repo
+
+      cat >> services.yaml <<EOF
+      - name: ${PROJECT_NAME}
+        type: ${TEMPLATE_TYPE}
+        project_id: ${MIDDLE_PROJECT_ID}
+        repo_url: ${MIDDLE_PROJECT_WEB}
+        config_repo_url: ${MIDDLECONF_PROJECT_WEB}
+        stands: [${DEPLOY_STANDS}]
+        databases:
+          postgresql: ${PG_ENABLED}
+          clickhouse: ${CH_ENABLED}
+          redis: ${REDIS_ENABLED}
+        created_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+        created_by: ${GITLAB_USER_LOGIN}
+      EOF
+
+      git add services.yaml
+      git commit -m "feat: register ${PROJECT_NAME}"
+      git push origin main
+
+
+register-in-dsl:
+  stage: register-dsl
+  image: $CI_IMAGE
+  needs:
+    - job: create-repo
+      artifacts: true
+    - fill-config
+  variables:
+    DSL_REPO_PATH: "libs/cicd/nmf/nmf-job-dsl"
+    DSL_FILE_DIR: "middle/itbigdata"
+    DSL_BRANCH: "master"
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache git python3 py3-yaml
+    - git config --global user.email "cicd-generator@megafon.ru"
+    - git config --global user.name "CICD Generator"
+  script:
+    - |
+      PRODUCT="${PRODUCT_NAME:-$PROJECT_NAME}"
+      git clone --branch "${DSL_BRANCH}" \
+        "https://oauth2:${GITLAB_TUZ_TOKEN}@cicd-git.megafon.ru/${DSL_REPO_PATH}.git" dsl-repo
+      cd dsl-repo
+      mkdir -p "${DSL_FILE_DIR}"
+      DSL_FILE="${DSL_FILE_DIR}/${PRODUCT}.yaml"
+
+      python3 - <<PYEOF
+      from pathlib import Path
+      import yaml
+
+      path = Path("${DSL_FILE}")
+      service = "${PROJECT_NAME}"
+      stands = [s.strip() for s in "${DEPLOY_STANDS}".split(",") if s.strip()]
+      dev_stands = [s.strip() for s in "${HELM_STANDS_DEV}".split(",") if s.strip()]
+      prod_stands = [s.strip() for s in "${HELM_STANDS_PROD}".split(",") if s.strip()]
+      env_map = {"dev": dev_stands, "preprod": dev_stands, "prod": prod_stands}
+
+      entry = {
+          "name": service,
+          "deploy_type": "helm",
+          "pipeline": "cicd",
+          "conf": {"helm": {env: env_map.get(env, []) for env in stands}},
+      }
+
+      data = yaml.safe_load(path.read_text()) if path.exists() else {}
+      data = data or {}
+      products = [p for p in (data.get("products") or []) if p.get("name") != service]
+      products.append(entry)
+      data["products"] = products
+      data.setdefault("conf", {}).setdefault("parameters", {}).setdefault("FORCE", False)
+
+      with path.open("w") as f:
+          f.write("---\n")
+          yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+      PYEOF
+
+      git add "${DSL_FILE}"
+      if git diff --cached --quiet; then
+        echo "Нет изменений в ${DSL_FILE}"
+      else
+        git commit -m "feat: register ${PROJECT_NAME} in job-dsl"
+        git push origin "${DSL_BRANCH}"
+      fi

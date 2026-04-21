@@ -1,0 +1,76 @@
+global:
+  namespace: "{{PROJECT_NAME}}"
+
+generic:
+  deployTimeout: "1m"
+  istio:
+    injection: enabled
+  priorityClassName: develop
+  imagePullSecrets:
+    - name: mf-artifactory-registry
+  namespaceLabels:
+    "megafon.ru/informationSystem": "{{PROJECT_NAME}}"
+    "team": "itbigdata"
+
+pdb:
+  minAvailable: 1
+
+service:
+  ports:
+    - name: http
+      port: {{SERVICE_PORT}}
+      protocol: TCP
+      targetPort: {{SERVICE_PORT}}
+  type: ClusterIP
+
+deployment:
+  replicaCount: 1
+  annotations:
+    logging: PLAIN
+    sidecar.istio.io/inject: "true"
+    sidecar.istio.io/proxyCPU: "10m"
+    sidecar.istio.io/proxyMemory: "12Mi"
+    sidecar.istio.io/proxyCPULimit: "100m"
+    sidecar.istio.io/proxyMemoryLimit: "128Mi"
+  containerSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 11200
+    runAsGroup: 11200
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+    privileged: false
+    seccompProfile:
+      type: RuntimeDefault
+  container:
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    startupProbe:
+      httpGet:
+        path: /eapi/{{"{{"}} include "helpers.app.name" . {{"}}"}}/manage/health
+        port: {{SERVICE_PORT}}
+        scheme: HTTP
+      failureThreshold: 30
+      periodSeconds: 10
+    livenessProbe:
+      httpGet:
+        path: /eapi/{{"{{"}} include "helpers.app.name" . {{"}}"}}/manage/health
+        port: {{SERVICE_PORT}}
+        scheme: HTTP
+      initialDelaySeconds: 30
+      failureThreshold: 4
+      periodSeconds: 15
+    readinessProbe:
+      httpGet:
+        path: /eapi/{{"{{"}} include "helpers.app.name" . {{"}}"}}/manage/health
+        port: {{SERVICE_PORT}}
+        scheme: HTTP
+      initialDelaySeconds: 10
+      failureThreshold: 3
+      periodSeconds: 5

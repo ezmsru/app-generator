@@ -1,0 +1,70 @@
+generic:
+  deployTimeout: "5m"
+  priorityClassName: production
+
+pam:
+  provider: "singleconnect"
+  url: "https://pam.megafon.ru"
+  aapmToken: ""
+  secrets:
+    - name: {{PROJECT_NAME}}_postgres_db_password
+      secretPath: "/MegaFon/Common/Data-Analytics/prod/{{PROJECT_NAME}}/postgres_db_password"
+      property: password
+    - name: {{PROJECT_NAME}}_postgres_db_username
+      secretPath: "/MegaFon/Common/Data-Analytics/prod/{{PROJECT_NAME}}/postgres_db_password"
+      property: username
+    - name: {{PROJECT_NAME}}_redis_db_password
+      secretPath: "/MegaFon/Common/Data-Analytics/prod/{{PROJECT_NAME}}/redis_db_password"
+      property: password
+    - name: {{PROJECT_NAME}}_redis_db_username
+      secretPath: "/MegaFon/Common/Data-Analytics/prod/{{PROJECT_NAME}}/redis_db_password"
+      property: username
+
+deployment:
+  replicaCount: 3
+  container:
+    registry: docker-middle-prod-local.unixrepo.megafon.ru
+    imagePullPolicy: IfNotPresent
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+    env:
+      - name: ENV
+        value: "PROD"
+      - name: APP_NAME
+        value: "{{PROJECT_NAME}}"
+      - name: APP_ENV
+        value: "prod"
+      - name: LOG_LEVEL
+        value: "warn"
+
+      - name: DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: {{PROJECT_NAME}}-secrets-from-pam
+            key: {{PROJECT_NAME}}_postgres_db_username
+      - name: DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: {{PROJECT_NAME}}-secrets-from-pam
+            key: {{PROJECT_NAME}}_postgres_db_password
+      - name: DB_HOST
+        value: "{{PG_HOST}}"
+      - name: DB_NAME
+        value: "{{PG_DB}}"
+      - name: DB_PORT
+        value: "5432"
+
+      - name: REDIS_HOST
+        value: "{{REDIS_HOST}}"
+      - name: REDIS_PORT
+        value: "6379"
+
+      - name: CH_HOST
+        value: "{{CH_HOST}}"
+      - name: CH_DB
+        value: "{{CH_DB}}"

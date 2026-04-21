@@ -1,0 +1,20 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: "{{PROJECT_NAME}}"
+  datasource:
+    url: jdbc:postgresql://${PG_HOST:localhost}:${PG_PORT:5432}/${PG_DB:mydb}
+    username: ${PG_USER:}
+    password: ${PG_PASSWORD:}
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+
+clickhouse:
+  host: ${CH_HOST:localhost}
+  port: ${CH_PORT:8123}
+  database: ${CH_DB:default}
+  username: ${CH_USER:}
+  password: ${CH_PASSWORD:}
