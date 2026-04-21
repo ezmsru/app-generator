@@ -21,7 +21,7 @@ pam:
       property: username
 
 deployment:
-  replicaCount: 3
+  replicaCount: 1
   container:
     registry: docker-middle-prod-local.unixrepo.megafon.ru
     imagePullPolicy: IfNotPresent

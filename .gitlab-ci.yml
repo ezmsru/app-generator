@@ -17,7 +17,7 @@ stages:
 
 variables:
   GITLAB_URL: "https://cicd-git.megafon.ru"
-  CI_IMAGE: "$ITBIGDATA_URL_UNIXREPO/alpine:3.22"
+  CI_IMAGE: "mf-ubi-target-docker-local.unixrepo.megafon.ru/alpine:3.22"
   # --- Параметры, заполняемые разработчиком при Run Pipeline ---
   TARGET_GROUP_NAME:
     description: "Группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (создастся, если нет)"
@@ -103,8 +103,11 @@ validate-params:
       [ -z "$TARGET_GROUP_NAME" ] && echo "ERROR: TARGET_GROUP_NAME обязателен" && exit 1
 
       for v in PROJECT_NAME TARGET_GROUP_NAME; do
-        if ! echo "${!v}" | grep -qE '^[a-z0-9][a-z0-9._-]*$'; then
-          echo "ERROR: ${v}: только a-z, 0-9, ., -, _"; exit 1
+        eval "val=\"\$$v\""
+        
+        if ! echo "$val" | grep -qE '^[a-z0-9][a-z0-9._-]*$'; then
+          echo "ERROR: ${v}: только a-z, 0-9, ., -, _"
+          exit 1
         fi
       done
 
