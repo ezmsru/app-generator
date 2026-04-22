@@ -9,11 +9,11 @@ default:
 stages:
   - validate
   - create-repo
+  - register-dsl
   - fill-template
   - fill-config
   - setup-webhook
   - register
-  - register-dsl
 
 variables:
   GITLAB_URL: "https://cicd-git.megafon.ru"
@@ -432,7 +432,6 @@ register-in-dsl:
   needs:
     - job: create-repo
       artifacts: true
-    - fill-config
   variables:
     DSL_REPO_PATH: "libs/cicd/nmf/nmf-job-dsl"
     DSL_FILE_DIR: "middle/itbigdata"
