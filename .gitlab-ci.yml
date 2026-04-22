@@ -376,8 +376,8 @@ setup-webhook:
           --data "{
             \"url\": \"${WEBHOOK_URL}\",
             \"push_events\": true,
-            \"merge_requests_events\": true,
             \"note_events\": true,
+            \"merge_requests_events\": true,
             \"enable_ssl_verification\": true
           }" \
           "${GITLAB_URL}/api/v4/projects/${PID}/hooks" | jq .
