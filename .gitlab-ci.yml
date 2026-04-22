@@ -239,9 +239,12 @@ create-repo:
 fill-template:
   stage: fill-template
   image: $CI_IMAGE
+  when: delayed
+  start_in: '1 minute'
   needs:
     - job: create-repo
       artifacts: true
+    - register-in-dsl
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache git
@@ -346,12 +349,9 @@ fill-config:
         {} +
 
       cd new-project
-      git checkout -b develop
       git add -A
       git commit -m "feat: middleconf (Dockerfile + mfactorylib helm, stands: ${DEPLOY_STANDS})"
-      git push origin develop
-      git tag 0.0.1
-      git push origin 0.0.1
+      git push origin master
 
 
 setup-webhook:
