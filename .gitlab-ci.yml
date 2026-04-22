@@ -496,7 +496,5 @@ register-in-dsl:
       git push \
         -o merge_request.create \
         -o merge_request.target="${DSL_TARGET_BRANCH}" \
-        -o merge_request.merge_when_pipeline_succeeds \
-        -o merge_request.remove_source_branch \
         -o merge_request.title="feat: register ${PROJECT_NAME} in job-dsl" \
         origin "${FEATURE_BRANCH}"
