@@ -10,8 +10,8 @@ stages:
   - validate
   - create-repo
   - register-dsl
-  - fill-template
   - fill-config
+  - fill-template
   - setup-webhook
   - register
 
@@ -245,6 +245,7 @@ fill-template:
     - job: create-repo
       artifacts: true
     - register-in-dsl
+    - fill-config
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache git
@@ -279,7 +280,6 @@ fill-config:
   needs:
     - job: create-repo
       artifacts: true
-    - fill-template
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache git
@@ -376,6 +376,7 @@ setup-webhook:
           --data "{
             \"url\": \"${WEBHOOK_URL}\",
             \"push_events\": true,
+            \"push_events_branch_filter\": \"\",
             \"push_events_branch_filter_strategy\": \"all_branches\",
             \"note_events\": true,
             \"merge_requests_events\": true,
