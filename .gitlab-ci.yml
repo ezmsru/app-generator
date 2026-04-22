@@ -384,8 +384,7 @@ setup-webhook:
           "${GITLAB_URL}/api/v4/projects/${PID}/hooks" | jq .
       }
 
-      set_webhook "${MIDDLE_PROJECT_ID}"     "${GITLAB_TUZ_TOKEN}"
-      set_webhook "${MIDDLECONF_PROJECT_ID}" "${GITLAB_MIDDLECONF_TUZ_TOKEN}"
+      set_webhook "${MIDDLE_PROJECT_ID}" "${GITLAB_TUZ_TOKEN}"
 
 
 register-in-core:
