@@ -201,7 +201,7 @@ create-repo:
             \"description\": \"${DESC}\",
             \"visibility\": \"internal\",
             \"initialize_with_readme\": true,
-            \"default_branch\": \"main\"
+            \"default_branch\": \"master\"
           }" \
           "${GITLAB_URL}/api/v4/projects"
       }
@@ -262,9 +262,12 @@ fill-template:
         -exec sed -i "s/{{PROJECT_NAME}}/${PROJECT_NAME}/g" {} +
 
       cd new-project
+      git checkout -b develop
       git add -A
       git commit -m "feat: init from ${TEMPLATE_TYPE} template"
-      git push origin main
+      git push origin develop
+      git tag 0.0.1
+      git push origin 0.0.1
 
 
 fill-config:
@@ -343,9 +346,12 @@ fill-config:
         {} +
 
       cd new-project
+      git checkout -b develop
       git add -A
       git commit -m "feat: middleconf (Dockerfile + mfactorylib helm, stands: ${DEPLOY_STANDS})"
-      git push origin main
+      git push origin develop
+      git tag 0.0.1
+      git push origin 0.0.1
 
 
 setup-webhook:
