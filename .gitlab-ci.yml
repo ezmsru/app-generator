@@ -376,6 +376,7 @@ setup-webhook:
           --data "{
             \"url\": \"${WEBHOOK_URL}\",
             \"push_events\": true,
+            \"push_events_branch_filter_strategy\": \"all_branches\",
             \"note_events\": true,
             \"merge_requests_events\": true,
             \"enable_ssl_verification\": true
