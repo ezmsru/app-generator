@@ -369,8 +369,9 @@ setup-webhook:
     - |
       set_webhook() {
         local PID="$1"; local TOKEN="$2"
-        echo "=== webhook → project ${PID} ==="
-        curl -s --request POST \
+        echo "=== webhook → project ${PID} (POST) ==="
+        local CREATE_RESP
+        CREATE_RESP=$(curl -s --request POST \
           --header "PRIVATE-TOKEN: ${TOKEN}" \
           --header "Content-Type: application/json" \
           --data "{
@@ -382,7 +383,25 @@ setup-webhook:
             \"merge_requests_events\": true,
             \"enable_ssl_verification\": true
           }" \
-          "${GITLAB_URL}/api/v4/projects/${PID}/hooks" | jq .
+          "${GITLAB_URL}/api/v4/projects/${PID}/hooks")
+        echo "$CREATE_RESP" | jq .
+
+        local HOOK_ID
+        HOOK_ID=$(echo "$CREATE_RESP" | jq -r '.id')
+        if [ -z "$HOOK_ID" ] || [ "$HOOK_ID" = "null" ]; then
+          echo "ERROR: не удалось получить id созданного хука"
+          exit 1
+        fi
+
+        echo "=== webhook → project ${PID} (PUT id=${HOOK_ID}, force all_branches) ==="
+        curl -s --request PUT \
+          --header "PRIVATE-TOKEN: ${TOKEN}" \
+          --header "Content-Type: application/json" \
+          --data "{
+            \"push_events_branch_filter\": \"\",
+            \"push_events_branch_filter_strategy\": \"all_branches\"
+          }" \
+          "${GITLAB_URL}/api/v4/projects/${PID}/hooks/${HOOK_ID}" | jq .
       }
 
       set_webhook "${MIDDLE_PROJECT_ID}" "${GITLAB_TUZ_TOKEN}"
