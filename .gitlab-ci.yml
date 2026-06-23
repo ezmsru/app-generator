@@ -1,3 +1,102 @@
+spec:
+  inputs:
+    # --- Основное ---
+    target_group_name:
+      type: string
+      default: cicdbigdata
+      description: "Группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (создастся, если нет)"
+      regex: '^[a-z0-9][a-z0-9._-]*$'
+    project_name:
+      type: string
+      description: "Имя нового репозитория (латиница, без пробелов) — обязательно"
+      regex: '^[a-z0-9][a-z0-9._-]*$'
+    template_type:
+      type: string
+      default: python-fastapi
+      description: "Тип шаблона приложения"
+      options: ["python-fastapi", "python-flask", "python-gunicorn", "java", "node"]
+    deploy_stands:
+      type: string
+      default: dev
+      description: "Стенды деплоя"
+      options: ["dev", "dev,preprod", "dev,preprod,prod"]
+    # --- PAM ---
+    pam_source:
+      type: string
+      default: ""
+      description: "Путь до секретов /MegaFon/Common/Data-Analytics/dev/<1 уровень>/<2 уровень(ИС)>/ (например: LLM/cost_scan)"
+    # --- PostgreSQL ---
+    pg_enabled:
+      type: boolean
+      default: false
+      description: "Подключить PostgreSQL"
+    pg_host:
+      type: string
+      default: ""
+      description: "PostgreSQL host"
+    pg_db:
+      type: string
+      default: ""
+      description: "PostgreSQL database"
+    # --- ClickHouse ---
+    ch_enabled:
+      type: boolean
+      default: false
+      description: "Подключить ClickHouse"
+    ch_host:
+      type: string
+      default: ""
+      description: "ClickHouse host"
+    ch_db:
+      type: string
+      default: ""
+      description: "ClickHouse database"
+    # --- Redis ---
+    redis_enabled:
+      type: boolean
+      default: false
+      description: "Подключить Redis"
+    redis_host:
+      type: string
+      default: ""
+      description: "Redis host"
+    # --- S3 ---
+    s3_enabled:
+      type: boolean
+      default: false
+      description: "Подключить S3"
+    s3_endpoint_url:
+      type: string
+      default: ""
+      description: "S3 endpoint URL"
+    s3_bucket:
+      type: string
+      default: ""
+      description: "S3 bucket"
+    s3_prefix:
+      type: string
+      default: ""
+      description: "S3 prefix (например: ocr/)"
+    # --- Регистрация / прочее ---
+    core_repo_path:
+      type: string
+      default: ""
+      description: "Путь к core-registry (group/project, пусто — не регистрировать)"
+    product_name:
+      type: string
+      default: ""
+      description: "Имя продукта для job-dsl (пусто — взять project_name)"
+    helm_stands_dev:
+      type: string
+      default: vlg-t2-dc-s
+      description: "DC-стенды для dev/preprod"
+      options: ["vlg-t2-dc-s", "vlg-t2-dc-l", "vlg-t2-dc-s,vlg-t2-dc-l"]
+    helm_stands_prod:
+      type: string
+      default: msk-p1-dm-gen
+      description: "DC-стенды для prod"
+      options: ["msk-p1-dm-gen", "msk-p1-kb-gen", "msk-p1-dm-gen,msk-p1-kb-gen"]
+---
 include:
   - project: 'middle/itbigdata/devops_tools/gitlab-templates'
     file: 'templates/unixrepo-auth.yml'
@@ -5,6 +104,13 @@ include:
 default:
   tags:
     - docker-abd
+
+# project_name — обязательный input, поэтому ограничиваем создание pipeline
+# ручным запуском (Run pipeline). Иначе push в репо породил бы pipeline,
+# который не сможет создаться без обязательного input.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
 
 stages:
   - validate
@@ -18,93 +124,28 @@ stages:
 variables:
   GITLAB_URL: "https://cicd-git.megafon.ru"
   CI_IMAGE: "mf-ubi-target-docker-local.unixrepo.megafon.ru/alpine:3.22"
-  # --- Параметры, заполняемые разработчиком при Run Pipeline ---
-  TARGET_GROUP_NAME:
-    description: "**Группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (создастся, если нет)**"
-    value: "cicdbigdata"
-  PROJECT_NAME:
-    description: "**Имя нового репозитория (латиница, без пробелов)**"
-  TEMPLATE_TYPE:
-    description: "**Тип шаблона приложения**"
-    value: "python-fastapi"
-    options:
-      - "python-fastapi"
-      - "python-flask"
-      - "python-gunicorn"
-      - "java"
-      - "node"
-  DEPLOY_STANDS:
-    description: "**Стенды деплоя (через запятую)**"
-    value: "dev"
-    options:
-      - "dev"
-      - "dev,preprod"
-      - "dev,preprod,prod"
-  # --- PAM ---
-  PAM_SOURCE:
-    description: "**Путь до секретов /MegaFon/Common/Data-Analytics/dev/<1 уровень>/<2 уровень(наименование ИС)>/; Например: LLM/cost_scan**"
-    value: ""
-  # --- Базы данных ---
-  PG_ENABLED:
-    description: "**Подключить PostgreSQL**"
-    value: "false"
-    options: ["true", "false"]
-  PG_HOST:
-    description: "**PostgreSQL host**"
-    value: ""
-  PG_DB:
-    description: "**PostgreSQL database**"
-    value: ""
-  CH_ENABLED:
-    description: "**Подключить ClickHouse**"
-    value: "false"
-    options: ["true", "false"]
-  CH_HOST:
-    description: "**ClickHouse host**"
-    value: ""
-  CH_DB:
-    description: "**ClickHouse database**"
-    value: ""
-  REDIS_ENABLED:
-    description: "**Подключить Redis**"
-    value: "false"
-    options: ["true", "false"]
-  REDIS_HOST:
-    description: "Redis host"
-    value: ""
-  S3_ENABLED:
-    description: "**Подключить S3**"
-    value: "false"
-    options: ["true", "false"]
-  S3_ENDPOINT_URL:
-    description: "**S3 endpoint URL**"
-    value: ""
-  S3_BUCKET:
-    description: "**S3 bucket**"
-    value: ""
-  S3_PREFIX:
-    description: "**S3 prefix (например: ocr/)**"
-    value: ""
-  CORE_REPO_PATH:
-    description: "**Путь к core-registry (group/project, пусто — не регистрировать)**"
-    value: ""
-  PRODUCT_NAME:
-    description: "**Имя продукта для job-dsl (пусто — взять PROJECT_NAME)**"
-    value: ""
-  HELM_STANDS_DEV:
-    description: "**Cтенды для dev/preprod (через запятую)**"
-    value: "vlg-t2-dc-s"
-    options:
-      - "vlg-t2-dc-s"
-      - "vlg-t2-dc-l"
-      - "vlg-t2-dc-s,vlg-t2-dc-l"
-  HELM_STANDS_PROD:
-    description: "**Cтенды для prod (через запятую)**"
-    value: "msk-p1-dm-gen"
-    options:
-      - "msk-p1-dm-gen"
-      - "msk-p1-kb-gen"
-      - "msk-p1-dm-gen,msk-p1-kb-gen"
+  # --- Маппинг inputs → variables: весь shell ниже использует $VAR как раньше ---
+  TARGET_GROUP_NAME: "$[[ inputs.target_group_name ]]"
+  PROJECT_NAME: "$[[ inputs.project_name ]]"
+  TEMPLATE_TYPE: "$[[ inputs.template_type ]]"
+  DEPLOY_STANDS: "$[[ inputs.deploy_stands ]]"
+  PAM_SOURCE: "$[[ inputs.pam_source ]]"
+  PG_ENABLED: "$[[ inputs.pg_enabled ]]"
+  PG_HOST: "$[[ inputs.pg_host ]]"
+  PG_DB: "$[[ inputs.pg_db ]]"
+  CH_ENABLED: "$[[ inputs.ch_enabled ]]"
+  CH_HOST: "$[[ inputs.ch_host ]]"
+  CH_DB: "$[[ inputs.ch_db ]]"
+  REDIS_ENABLED: "$[[ inputs.redis_enabled ]]"
+  REDIS_HOST: "$[[ inputs.redis_host ]]"
+  S3_ENABLED: "$[[ inputs.s3_enabled ]]"
+  S3_ENDPOINT_URL: "$[[ inputs.s3_endpoint_url ]]"
+  S3_BUCKET: "$[[ inputs.s3_bucket ]]"
+  S3_PREFIX: "$[[ inputs.s3_prefix ]]"
+  CORE_REPO_PATH: "$[[ inputs.core_repo_path ]]"
+  PRODUCT_NAME: "$[[ inputs.product_name ]]"
+  HELM_STANDS_DEV: "$[[ inputs.helm_stands_dev ]]"
+  HELM_STANDS_PROD: "$[[ inputs.helm_stands_prod ]]"
 
 
 validate-params:
