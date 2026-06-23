@@ -72,6 +72,19 @@ variables:
   REDIS_HOST:
     description: "Redis host"
     value: ""
+  S3_ENABLED:
+    description: "**Подключить S3**"
+    value: "false"
+    options: ["true", "false"]
+  S3_ENDPOINT_URL:
+    description: "**S3 endpoint URL**"
+    value: ""
+  S3_BUCKET:
+    description: "**S3 bucket**"
+    value: ""
+  S3_PREFIX:
+    description: "**S3 prefix (например: ocr/)**"
+    value: ""
   CORE_REPO_PATH:
     description: "**Путь к core-registry (group/project, пусто — не регистрировать)**"
     value: ""
@@ -114,6 +127,23 @@ validate-params:
           exit 1
         fi
       done
+
+      # --- Валидация зависимостей: enabled ⇒ обязательные параметры ---
+      if [ "$PG_ENABLED" = "true" ]; then
+        [ -z "$PG_HOST" ] && echo "ERROR: PG_ENABLED=true, но PG_HOST пуст" && exit 1
+        [ -z "$PG_DB" ]   && echo "ERROR: PG_ENABLED=true, но PG_DB пуст"   && exit 1
+      fi
+      if [ "$REDIS_ENABLED" = "true" ]; then
+        [ -z "$REDIS_HOST" ] && echo "ERROR: REDIS_ENABLED=true, но REDIS_HOST пуст" && exit 1
+      fi
+      if [ "$CH_ENABLED" = "true" ]; then
+        [ -z "$CH_HOST" ] && echo "ERROR: CH_ENABLED=true, но CH_HOST пуст" && exit 1
+        [ -z "$CH_DB" ]   && echo "ERROR: CH_ENABLED=true, но CH_DB пуст"   && exit 1
+      fi
+      if [ "$S3_ENABLED" = "true" ]; then
+        [ -z "$S3_ENDPOINT_URL" ] && echo "ERROR: S3_ENABLED=true, но S3_ENDPOINT_URL пуст" && exit 1
+        [ -z "$S3_BUCKET" ]       && echo "ERROR: S3_ENABLED=true, но S3_BUCKET пуст"       && exit 1
+      fi
 
       # --- Резолв/создание целевых групп: middle + middleconf ---
       # middle и middleconf — независимые root-группы с разными ТУЗами
@@ -327,6 +357,45 @@ fill-config:
         echo "OK: скопирован ${dc}-values.yaml"
       done
 
+      # --- Условное удаление секций по *_ENABLED ---
+      # Каждая интеграция в values обёрнута маркерами "# >>> <name>" / "# <<< <name>"
+      # (и в pam.secrets, и в env). Если флаг != true — блок вырезается целиком,
+      # чтобы под не падал на отсутствующем PAM-секрете неиспользуемой интеграции.
+      strip_section() {
+        sec="$1"; flag="$2"
+        if [ "$flag" != "true" ]; then
+          for vf in new-project/helm/*-values.yaml; do
+            [ -f "$vf" ] || continue
+            sed -i "/# >>> ${sec}/,/# <<< ${sec}/d" "$vf"
+          done
+          echo "section ${sec}: вырезана (enabled=${flag})"
+        else
+          echo "section ${sec}: оставлена (enabled=${flag})"
+        fi
+      }
+      strip_section postgres   "${PG_ENABLED}"
+      strip_section redis      "${REDIS_ENABLED}"
+      strip_section clickhouse "${CH_ENABLED}"
+      strip_section s3         "${S3_ENABLED}"
+
+      # Если не включена ни одна секрето-несущая интеграция (PG/Redis/S3) —
+      # вырезаем весь pam-блок, чтобы не создавался пустой ExternalSecret.
+      if [ "$PG_ENABLED" != "true" ] && [ "$REDIS_ENABLED" != "true" ] && [ "$S3_ENABLED" != "true" ]; then
+        for vf in new-project/helm/*-values.yaml; do
+          [ -f "$vf" ] || continue
+          sed -i "/# >>> pam/,/# <<< pam/d" "$vf"
+        done
+        echo "pam: вырезан (нет включённых секретов)"
+      fi
+
+      # Убираем строки-маркеры у оставшихся (включённых) секций
+      # и схлопываем подряд идущие пустые строки (косметика после вырезания)
+      for vf in new-project/helm/*-values.yaml; do
+        [ -f "$vf" ] || continue
+        sed -i '/# >>> /d;/# <<< /d' "$vf"
+        cat -s "$vf" > "$vf.tmp" && mv "$vf.tmp" "$vf"
+      done
+
       # Порт по типу шаблона
       case "${TEMPLATE_TYPE}" in
         java) SERVICE_PORT=8080 ;;
@@ -346,6 +415,10 @@ fill-config:
         -e "s/{{CH_ENABLED}}/${CH_ENABLED}/g" \
         -e "s/{{CH_HOST}}/${CH_HOST}/g" \
         -e "s/{{CH_DB}}/${CH_DB}/g" \
+        -e "s/{{S3_ENABLED}}/${S3_ENABLED}/g" \
+        -e "s|{{S3_ENDPOINT_URL}}|${S3_ENDPOINT_URL}|g" \
+        -e "s/{{S3_BUCKET}}/${S3_BUCKET}/g" \
+        -e "s|{{S3_PREFIX}}|${S3_PREFIX}|g" \
         {} +
 
       cd new-project

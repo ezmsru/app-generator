@@ -50,6 +50,7 @@ generator/
 - `PG_ENABLED`, `PG_HOST`, `PG_DB` — PostgreSQL
 - `CH_ENABLED`, `CH_HOST`, `CH_DB` — ClickHouse
 - `REDIS_ENABLED`, `REDIS_HOST` — Redis
+- `S3_ENABLED`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_PREFIX` — S3 (токен доступа берётся из PAM: `{{PROJECT_NAME}}_s3_token`)
 - `WEBHOOK_URL` — опционально, URL вебхука
 - `CORE_REPO_PATH` — опционально, `group/core-registry` для регистрации
 
