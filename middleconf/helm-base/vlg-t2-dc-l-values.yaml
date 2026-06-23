@@ -4,7 +4,7 @@ generic:
 pam:
   provider: "singleconnect"
   url: "https://pam.megafon.ru"
-  aapmToken: ""
+  aapmSecret: "pam_token_lambda_llm"
   secrets:
     - name: {{PROJECT_NAME}}_postgres_db_password
       secretPath: "/MegaFon/Common/Data-Analytics/preprod/{{PROJECT_NAME}}/postgres_db_password"
