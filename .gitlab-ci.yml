@@ -508,11 +508,12 @@ fill-config:
       fi
 
       # Убираем строки-маркеры у оставшихся (включённых) секций
-      # и схлопываем подряд идущие пустые строки (косметика после вырезания)
+      # и схлопываем подряд идущие пустые строки (косметика после вырезания).
+      # Squeeze делаем через sed (busybox cat не знает -s; in-place, без .tmp).
       for vf in new-project/helm/*-values.yaml; do
         [ -f "$vf" ] || continue
         sed -i '/# >>> /d;/# <<< /d' "$vf"
-        cat -s "$vf" > "$vf.tmp" && mv "$vf.tmp" "$vf"
+        sed -i '/^$/N;/^\n$/D' "$vf"
       done
 
       # Порт по типу шаблона
@@ -546,6 +547,8 @@ fill-config:
         {} +
 
       cd new-project
+      # подстраховка: не коммитим случайные временные файлы
+      find . -name '*.tmp' -delete
       git add -A
       git commit -m "feat: middleconf (Dockerfile + mfactorylib helm, stands: ${DEPLOY_STANDS}, branch ${TARGET_BRANCH})"
       git push origin "${TARGET_BRANCH}"
@@ -760,6 +763,13 @@ delete-repository:
         # 202 Accepted — удаление принято (GitLab удаляет асинхронно)
         if [ "$dcode" = "202" ] || [ "$dcode" = "200" ] || [ "$dcode" = "204" ]; then
           echo "OK: удаление ${proj_path} принято (HTTP ${dcode})"
+        elif [ "$dcode" = "403" ]; then
+          echo "ERROR удаления ${proj_path}: HTTP 403 Forbidden"
+          echo "$resp" | sed '$d'
+          echo "Причина: у ТУЗа недостаточно прав. Удаление проекта в GitLab требует роли Owner"
+          echo "(или включённой в группе опции 'Maintainers can delete projects') + scope 'api' у токена."
+          echo "Выдайте ТУЗу роль Owner на группе ${parent}/itbigdata и повторите."
+          exit 1
         else
           echo "ERROR удаления ${proj_path} (HTTP ${dcode}):"
           echo "$resp" | sed '$d'
