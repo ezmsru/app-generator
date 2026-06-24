@@ -1,5 +1,7 @@
 # App Generator
 
+### ▶️ [Запустить pipeline](https://cicd-git.megafon.ru/middle/itbigdata/devops_tools/generator-app/-/pipelines/new)
+
 Конвейер для генерации шаблонных приложений Python/Java/Node с автоматическим созданием GitLab-репозитория, наполнением шаблоном, Helm-конфигом и регистрацией в ядре.
 
 ## Структура
@@ -57,7 +59,7 @@ generator/
 | `s3_enabled` / `s3_endpoint_url` / `s3_bucket` / `s3_prefix` | boolean / string | `false` / `""` | S3 (токен доступа — из PAM: `<project_name>_s3_token`) |
 | `servicemonitor_enabled` | boolean | `false` | ServiceMonitor для Prometheus. При `true` → `serviceMonitor.enabled=true` в values; манифест из `templates/servicemonitor.yaml` (scrape `/eapi/<app>/manage/prometheus`) |
 | `core_repo_path` | string | `""` | `group/core-registry` для регистрации (пусто — не регистрировать) |
-| `product_name` | string | `""` | имя продукта для job-dsl (пусто — взять `project_name`) |
+| `product_name` | string | `""` | имя продукта для [job-dsl](https://cicd-git.megafon.ru/libs/cicd/nmf/nmf-job-dsl/-/tree/master/middle/itbigdata?ref_type=heads) (пусто — взять `project_name`) |
 | `delete_password` | string | `""` | пароль подтверждения удаления (нужен при `action=delete`; сверяется с masked-переменной `DELETE_PASSWORD`) |
 
 > Включённые (`*_enabled=true`) интеграции БД/Redis/S3 попадают в helm-values; выключенные — вырезаются целиком (вместе с PAM-секретом) на стадии `fill-config`, чтобы под не падал на отсутствующем секрете. Если `*_enabled=true`, соответствующие host/db обязательны — это проверяется в `validate-params`.
@@ -68,7 +70,7 @@ generator/
 
 1. **validate-params** — проверка имени (regex) и зависимостей (`*_enabled=true ⇒ host/db обязательны`), резолв/создание обеих групп (`middle/itbigdata/<group>` и `middleconf/itbigdata/<group>`), проверка что проект не существует ни в одной
 2. **create-repo** — создание **двух** репозиториев: app в `middle/...` и config в `middleconf/...`
-3. **register-in-dsl** — регистрация продукта в `nmf-job-dsl` (`middle/itbigdata/<product>.yaml`) через ruamel.yaml + автоматический MR
+3. **register-in-dsl** — регистрация продукта в [`nmf-job-dsl`](https://cicd-git.megafon.ru/libs/cicd/nmf/nmf-job-dsl/-/tree/master/middle/itbigdata?ref_type=heads) (`middle/itbigdata/<product>.yaml`) через ruamel.yaml + автоматический MR
 4. **fill-config** — Dockerfile + Helm chart из `middleconf/` в **middleconf-репозиторий**; копируются только те `<dc>-values.yaml`, которые соответствуют выбранному `deploy_stands` (развёрнутому в `DC_STANDS`); неиспользуемые интеграции (`*_enabled != true`) вырезаются из values по маркерам
 5. **fill-template** — копирование шаблона из `middle/<template>/` в **middle-репозиторий** (ветка `develop` + тег `0.0.1`)
 6. **setup-webhook** — webhook на **middle-репозиторий** (URL задан в job)
