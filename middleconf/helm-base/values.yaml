@@ -56,14 +56,14 @@ deployment:
         memory: 128Mi
     startupProbe:
       httpGet:
-        path: /eapi/{{"{{"}} include "helpers.app.name" . {{"}}"}}/manage/health
+        path: /eapi/{{ include "helpers.app.name" . }}/manage/health
         port: {{SERVICE_PORT}}
         scheme: HTTP
       failureThreshold: 30
       periodSeconds: 10
     livenessProbe:
       httpGet:
-        path: /eapi/{{"{{"}} include "helpers.app.name" . {{"}}"}}/manage/health
+        path: /eapi/{{ include "helpers.app.name" . }}/manage/health
         port: {{SERVICE_PORT}}
         scheme: HTTP
       initialDelaySeconds: 30
@@ -71,7 +71,7 @@ deployment:
       periodSeconds: 15
     readinessProbe:
       httpGet:
-        path: /eapi/{{"{{"}} include "helpers.app.name" . {{"}}"}}/manage/health
+        path: /eapi/{{ include "helpers.app.name" . }}/manage/health
         port: {{SERVICE_PORT}}
         scheme: HTTP
       initialDelaySeconds: 10

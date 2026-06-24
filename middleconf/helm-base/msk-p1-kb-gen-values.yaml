@@ -37,7 +37,7 @@ pam:
 deployment:
   replicaCount: 1
   container:
-    registry: docker-middle-prod-local.unixrepo.megafon.ru
+    registry: docker-middle-release-local.unixrepo.megafon.ru
     imagePullPolicy: IfNotPresent
     resources:
       limits:
