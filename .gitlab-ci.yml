@@ -391,10 +391,10 @@ fill-template:
       git commit -m "feat: init from ${TEMPLATE_TYPE} template (branch ${TARGET_BRANCH})"
 
       # Пауза перед пушем: push ветки/тега триггерит деплой на стенд, а деплою нужен
-      # уже ВМЁРЖЕННЫЙ продукт в job-dsl. MR из register-in-dsl сливается ~2 мин после
-      # стадии register-dsl — без паузы триггер срабатывает раньше регистрации и деплой не идёт.
-      echo "Ждём ~2 мин слияния MR в job-dsl перед пушем (иначе деплой-триггер не сработает)..."
-      sleep 120
+      # уже ВМЁРЖЕННЫЙ продукт в job-dsl. MR из register-in-dsl сливается через ~1 мин
+      # после стадии register-dsl — без паузы триггер срабатывает раньше регистрации.
+      echo "Ждём ~1 мин слияния MR в job-dsl перед пушем (иначе деплой-триггер не сработает)..."
+      sleep 60
 
       git push origin "${TARGET_BRANCH}"
 
