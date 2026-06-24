@@ -390,24 +390,27 @@ fill-template:
       git add -A
       git commit -m "feat: init from ${TEMPLATE_TYPE} template (branch ${TARGET_BRANCH})"
 
-      # Пауза перед пушем: push ветки/тега триггерит деплой на стенд, а деплою нужен
-      # уже ВМЁРЖЕННЫЙ продукт в job-dsl. MR из register-in-dsl сливается через ~1 мин
+      # Тег версии создаём ДО пуша (develop→0.0.1, develop-N→0.0.N) и пушим ветку с тегом
+      # ОДНОЙ операцией. Иначе webhook на push ветки срабатывает раньше пуша тега, и на
+      # стороне деплоя 'git describe --tags' падает ("No names found").
+      TAG="0.0.${IDX}"
+      PUSH_REFS="${TARGET_BRANCH}"
+      if git ls-remote --exit-code --tags origin "${TAG}" >/dev/null 2>&1; then
+        echo "tag ${TAG} уже существует на origin — пушим только ветку"
+      else
+        git tag "${TAG}"
+        PUSH_REFS="${PUSH_REFS} ${TAG}"
+      fi
+
+      # Пауза перед пушем: push триггерит деплой на стенд, а деплою нужен уже
+      # ВМЁРЖЕННЫЙ продукт в job-dsl. MR из register-in-dsl сливается через ~1 мин
       # после стадии register-dsl — без паузы триггер срабатывает раньше регистрации.
       echo "Ждём ~1 мин слияния MR в job-dsl перед пушем (иначе деплой-триггер не сработает)..."
       sleep 60
 
-      git push origin "${TARGET_BRANCH}"
-
-      # Тег версии на каждую генерацию: develop→0.0.1, develop-N→0.0.N
-      TAG="0.0.${IDX}"
-      if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null \
-         || git ls-remote --exit-code --tags origin "${TAG}" >/dev/null 2>&1; then
-        echo "tag ${TAG} уже существует — пропуск"
-      else
-        git tag "${TAG}"
-        git push origin "${TAG}"
-        echo "tag ${TAG} → ${TARGET_BRANCH}"
-      fi
+      # ветка + тег одним пушем → к моменту вебхука тег уже в репозитории
+      git push origin ${PUSH_REFS}
+      echo "pushed: ${PUSH_REFS}"
 
 
 fill-config:
