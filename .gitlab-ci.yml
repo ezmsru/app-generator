@@ -340,6 +340,8 @@ fill-template:
   needs:
     - job: create-repo
       artifacts: true
+    # ждём, чтобы MR в job-dsl был уже создан (register-in-dsl), затем пауза на его слияние
+    - register-in-dsl
   rules:
     - if: $ACTION == "create"
   before_script:
@@ -387,6 +389,13 @@ fill-template:
       cd new-project
       git add -A
       git commit -m "feat: init from ${TEMPLATE_TYPE} template (branch ${TARGET_BRANCH})"
+
+      # Пауза перед пушем: push ветки/тега триггерит деплой на стенд, а деплою нужен
+      # уже ВМЁРЖЕННЫЙ продукт в job-dsl. MR из register-in-dsl сливается ~2 мин после
+      # стадии register-dsl — без паузы триггер срабатывает раньше регистрации и деплой не идёт.
+      echo "Ждём ~2 мин слияния MR в job-dsl перед пушем (иначе деплой-триггер не сработает)..."
+      sleep 120
+
       git push origin "${TARGET_BRANCH}"
 
       # Тег версии на каждую генерацию: develop→0.0.1, develop-N→0.0.N
