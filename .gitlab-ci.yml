@@ -580,16 +580,11 @@ register-in-dsl:
 
       path = Path("${DSL_FILE}")
       service = "${PROJECT_NAME}"
-      stands = [s.strip() for s in "${DEPLOY_STANDS}".split(",") if s.strip()]
-      dev_stands = [s.strip() for s in "${HELM_STANDS_DEV}".split(",") if s.strip()]
-      prod_stands = [s.strip() for s in "${HELM_STANDS_PROD}".split(",") if s.strip()]
-      env_map = {"dev": dev_stands, "preprod": dev_stands, "prod": prod_stands}
 
       entry = {
           "name": DQ(service),
-          "deploy_type": DQ("helm"),
-          "pipeline": DQ("cicd"),
-          "conf": {"helm": {env: [DQ(s) for s in env_map.get(env, [])] for env in stands}},
+          "deploy_type": "helm",
+          "pipeline": "cicd",
       }
 
       if path.exists():
