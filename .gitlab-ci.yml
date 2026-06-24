@@ -23,9 +23,12 @@ spec:
       options: ["python-fastapi", "python-flask", "python-gunicorn", "java", "node"]
     deploy_stands:
       type: string
-      default: dev
-      description: "Стенды деплоя"
-      options: ["dev", "dev,preprod", "dev,preprod,prod"]
+      default: "DEV"
+      description: "🎯 СТЕНДЫ · куда катим: DEV (vlg-t2-dc-s) → +PREPROD (vlg-t2-dc-l) → +PROD (msk-p1-dm-gen + msk-p1-kb-gen)"
+      options:
+        - "DEV"
+        - "DEV + PREPROD"
+        - "DEV + PREPROD + PROD"
     # --- PAM ---
     pam_source:
       type: string
@@ -87,7 +90,7 @@ spec:
     servicemonitor_enabled:
       type: boolean
       default: false
-      description: "📈 SERVICEMONITOR · включить ServiceMonitor (Prometheus scrape /eapi/<app>/manage/prometheus)"
+      description: "📈 SERVICEMONITOR · включить ServiceMonitor(кастомные метрики) (Prometheus scrape /eapi/<app>/manage/prometheus)"
     # --- Регистрация / прочее ---
     core_repo_path:
       type: string
@@ -97,16 +100,6 @@ spec:
       type: string
       default: ""
       description: "Имя продукта для job-dsl (пусто — взять project_name)"
-    helm_stands_dev:
-      type: string
-      default: vlg-t2-dc-s
-      description: "🎯 HELM-СТЕНДЫ · DC-стенды для dev/preprod"
-      options: ["vlg-t2-dc-s", "vlg-t2-dc-l", "vlg-t2-dc-s,vlg-t2-dc-l"]
-    helm_stands_prod:
-      type: string
-      default: msk-p1-dm-gen
-      description: "DC-стенды для prod"
-      options: ["msk-p1-dm-gen", "msk-p1-kb-gen", "msk-p1-dm-gen,msk-p1-kb-gen"]
     # --- Удаление (только при action=delete) ---
     delete_password:
       type: string
@@ -161,8 +154,6 @@ variables:
   SERVICEMONITOR_ENABLED: "$[[ inputs.servicemonitor_enabled ]]"
   CORE_REPO_PATH: "$[[ inputs.core_repo_path ]]"
   PRODUCT_NAME: "$[[ inputs.product_name ]]"
-  HELM_STANDS_DEV: "$[[ inputs.helm_stands_dev ]]"
-  HELM_STANDS_PROD: "$[[ inputs.helm_stands_prod ]]"
   ACTION: "$[[ inputs.action ]]"
   # пароль из формы; сверяется с masked CI-переменной DELETE_PASSWORD (задаётся в Settings → CI/CD)
   DELETE_PASSWORD_INPUT: "$[[ inputs.delete_password ]]"
@@ -212,30 +203,16 @@ validate-params:
         [ -z "$PAM_SOURCE" ] && echo "ERROR: включена интеграция с PAM-секретом (PG/Redis/S3), но PAM_SOURCE пуст" && exit 1
       fi
 
-      # --- Соответствие сред DEPLOY_STANDS выбранным DC-стендам (по env-tier) ---
-      # У каждого DC-стенда env «вшит» в values: dev=vlg-t2-dc-s, preprod=vlg-t2-dc-l, prod=msk-p1-*.
-      # Для каждой выбранной среды должен быть выбран DC-стенд того же tier.
-      dc_tier() {
-        case "$1" in
-          vlg-t2-dc-s) echo dev ;;
-          vlg-t2-dc-l) echo preprod ;;
-          msk-p1-dm-gen|msk-p1-kb-gen) echo prod ;;
-          *) echo unknown ;;
-        esac
-      }
-      SELECTED_DCS="${HELM_STANDS_DEV},${HELM_STANDS_PROD}"
-      for env in $(echo "${DEPLOY_STANDS}" | tr ',' ' '); do
-        FOUND=0
-        for dc in $(echo "${SELECTED_DCS}" | tr ',' ' '); do
-          [ -z "$dc" ] && continue
-          [ "$(dc_tier "$dc")" = "$env" ] && FOUND=1 && break
-        done
-        if [ "$FOUND" = "0" ]; then
-          echo "ERROR: для среды '${env}' не выбран DC-стенд нужного tier"
-          echo "Подсказка: dev⇒vlg-t2-dc-s, preprod⇒vlg-t2-dc-l, prod⇒msk-p1-dm-gen/msk-p1-kb-gen"
-          exit 1
-        fi
-      done
+      # --- DEPLOY_STANDS (дружелюбные имена) → конкретные DC-стенды ---
+      # DC_STANDS — список файлов <dc>-values.yaml; прокидывается дальше через dotenv.
+      case "$DEPLOY_STANDS" in
+        "DEV")                  DC_STANDS="vlg-t2-dc-s" ;;
+        "DEV + PREPROD")        DC_STANDS="vlg-t2-dc-s,vlg-t2-dc-l" ;;
+        "DEV + PREPROD + PROD") DC_STANDS="vlg-t2-dc-s,vlg-t2-dc-l,msk-p1-dm-gen,msk-p1-kb-gen" ;;
+        *) echo "ERROR: неизвестный deploy_stands '${DEPLOY_STANDS}' (ожидается: DEV | DEV + PREPROD | DEV + PREPROD + PROD)"; exit 1 ;;
+      esac
+      echo "DEPLOY_STANDS='${DEPLOY_STANDS}' → DC_STANDS='${DC_STANDS}'"
+      echo "DC_STANDS=${DC_STANDS}" >> group.env
 
       # --- Резолв/создание целевых групп: middle + middleconf ---
       # middle и middleconf — независимые root-группы с разными ТУЗами
@@ -444,6 +421,8 @@ fill-config:
   needs:
     - job: create-repo
       artifacts: true
+    - job: validate-params
+      artifacts: true
   rules:
     - if: $ACTION == "create"
   before_script:
@@ -499,18 +478,9 @@ fill-config:
       cp middleconf/helm-base/templates/all.yaml            new-project/helm/templates/all.yaml
       cp middleconf/helm-base/templates/servicemonitor.yaml new-project/helm/templates/servicemonitor.yaml
 
-      # DC-стенд-специфичные values: собираем уникальный набор стендов,
-      # релевантных выбранным средам DEPLOY_STANDS (dev/preprod → HELM_STANDS_DEV, prod → HELM_STANDS_PROD)
-      DC_LIST=""
-      for env in $(echo "${DEPLOY_STANDS}" | tr ',' ' '); do
-        case "$env" in
-          dev|preprod) SRC="${HELM_STANDS_DEV}" ;;
-          prod)        SRC="${HELM_STANDS_PROD}" ;;
-          *) echo "WARN: неизвестная среда '${env}'"; continue ;;
-        esac
-        DC_LIST="${DC_LIST} $(echo "$SRC" | tr ',' ' ')"
-      done
-      UNIQUE_DCS=$(echo "$DC_LIST" | tr ' ' '\n' | grep -v '^$' | sort -u)
+      # DC-стенд-специфичные values: DC_STANDS (из validate-params) перечисляет
+      # DC-стенды = имена файлов <dc>-values.yaml. Берём уникальный набор.
+      UNIQUE_DCS=$(echo "${DC_STANDS}" | tr ',' '\n' | grep -v '^$' | sort -u)
       for dc in $UNIQUE_DCS; do
         SRC_FILE="middleconf/helm-base/${dc}-values.yaml"
         [ ! -f "$SRC_FILE" ] && echo "ERROR: нет values-файла для DC-стенда '${dc}'" && exit 1
@@ -644,6 +614,8 @@ register-in-core:
   needs:
     - job: create-repo
       artifacts: true
+    - job: validate-params
+      artifacts: true
     - fill-config
   rules:
     - if: $CORE_REPO_PATH != "" && $ACTION == "create"
@@ -669,7 +641,7 @@ register-in-core:
         project_id: ${MIDDLE_PROJECT_ID}
         repo_url: ${MIDDLE_PROJECT_WEB}
         config_repo_url: ${MIDDLECONF_PROJECT_WEB}
-        stands: [${DEPLOY_STANDS}]
+        stands: [${DC_STANDS}]
         databases:
           postgresql: ${PG_ENABLED}
           clickhouse: ${CH_ENABLED}

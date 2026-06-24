@@ -49,9 +49,7 @@ generator/
 | `project_name` | string, **required**, regex `^[a-z0-9][a-z0-9._-]*$` | — | **цель** (для обоих режимов): имя репо. `create` — создаётся; `delete` — удаляется |
 | `target_group_name` | string, regex | `cicdbigdata` | **цель** (для обоих режимов): группа-продукт в `middle/itbigdata/` и `middleconf/itbigdata/`. `create` — создастся, если нет; `delete` — группа удаляемого репо (сама **не** удаляется) |
 | `template_type` | options | `python-fastapi` | python-fastapi / python-flask / python-gunicorn / java / node |
-| `deploy_stands` | options | `dev` | dev / dev,preprod / dev,preprod,prod |
-| `helm_stands_dev` | options | `vlg-t2-dc-s` | DC-стенды для dev/preprod: `vlg-t2-dc-s`, `vlg-t2-dc-l` (или оба) |
-| `helm_stands_prod` | options | `msk-p1-dm-gen` | DC-стенды для prod: `msk-p1-dm-gen`, `msk-p1-kb-gen` (или оба) |
+| `deploy_stands` | options | `DEV` | куда катим: `DEV` → `DEV + PREPROD` → `DEV + PREPROD + PROD`. В `validate-params` разворачивается в DC-стенды (`DEV`→`vlg-t2-dc-s`, `PREPROD`→`vlg-t2-dc-l`, `PROD`→`msk-p1-dm-gen,msk-p1-kb-gen`) = файлы `<dc>-values.yaml` |
 | `pam_source` | string | `""` | путь до секретов в PAM (например: `LLM/cost_scan`) |
 | `pg_enabled` / `pg_host` / `pg_db` | boolean / string | `false` / `""` | PostgreSQL |
 | `ch_enabled` / `ch_host` / `ch_db` | boolean / string | `false` / `""` | ClickHouse |
@@ -71,7 +69,7 @@ generator/
 1. **validate-params** — проверка имени (regex) и зависимостей (`*_enabled=true ⇒ host/db обязательны`), резолв/создание обеих групп (`middle/itbigdata/<group>` и `middleconf/itbigdata/<group>`), проверка что проект не существует ни в одной
 2. **create-repo** — создание **двух** репозиториев: app в `middle/...` и config в `middleconf/...`
 3. **register-in-dsl** — регистрация продукта в `nmf-job-dsl` (`middle/itbigdata/<product>.yaml`) через ruamel.yaml + автоматический MR
-4. **fill-config** — Dockerfile + Helm chart из `middleconf/` в **middleconf-репозиторий**; копируются только те `<dc>-values.yaml`, которые перечислены в `helm_stands_dev`/`helm_stands_prod` для выбранных сред; неиспользуемые интеграции (`*_enabled != true`) вырезаются из values по маркерам
+4. **fill-config** — Dockerfile + Helm chart из `middleconf/` в **middleconf-репозиторий**; копируются только те `<dc>-values.yaml`, которые соответствуют выбранному `deploy_stands` (развёрнутому в `DC_STANDS`); неиспользуемые интеграции (`*_enabled != true`) вырезаются из values по маркерам
 5. **fill-template** — копирование шаблона из `middle/<template>/` в **middle-репозиторий** (ветка `develop` + тег `0.0.1`)
 6. **setup-webhook** — webhook на **middle-репозиторий** (URL задан в job)
 7. **register-in-core** — запись в `services.yaml` ядра: `repo_url` = middle, `config_repo_url` = middleconf (если указан `core_repo_path`)
