@@ -91,15 +91,6 @@ spec:
       type: boolean
       default: false
       description: "📈 SERVICEMONITOR · включить ServiceMonitor(кастомные метрики) (Prometheus scrape /eapi/<app>/manage/prometheus)"
-    # --- Регистрация / прочее ---
-    core_repo_path:
-      type: string
-      default: ""
-      description: "📦 РЕГИСТРАЦИЯ · путь к core-registry (group/project, пусто — не регистрировать)"
-    product_name:
-      type: string
-      default: ""
-      description: "Имя продукта для job-dsl (пусто — взять project_name)"
     # --- Удаление (только при action=delete) ---
     delete_password:
       type: string
@@ -128,7 +119,6 @@ stages:
   - fill-config
   - fill-template
   - setup-webhook
-  - register
 
 variables:
   GITLAB_URL: "https://cicd-git.megafon.ru"
@@ -152,8 +142,6 @@ variables:
   S3_BUCKET: "$[[ inputs.s3_bucket ]]"
   S3_PREFIX: "$[[ inputs.s3_prefix ]]"
   SERVICEMONITOR_ENABLED: "$[[ inputs.servicemonitor_enabled ]]"
-  CORE_REPO_PATH: "$[[ inputs.core_repo_path ]]"
-  PRODUCT_NAME: "$[[ inputs.product_name ]]"
   ACTION: "$[[ inputs.action ]]"
   # пароль из формы; сверяется с masked CI-переменной DELETE_PASSWORD (задаётся в Settings → CI/CD)
   DELETE_PASSWORD_INPUT: "$[[ inputs.delete_password ]]"
@@ -606,57 +594,6 @@ setup-webhook:
       }
 
       set_webhook "${MIDDLE_PROJECT_ID}" "${GITLAB_TUZ_TOKEN}"
-
-
-register-in-core:
-  stage: register
-  image: $CI_IMAGE
-  needs:
-    - job: create-repo
-      artifacts: true
-    - job: validate-params
-      artifacts: true
-    - fill-config
-  rules:
-    - if: $CORE_REPO_PATH != "" && $ACTION == "create"
-  before_script:
-    - !reference [.unixrepo_configuration, auth_apk]
-    - apk add --no-cache git
-    - git config --global user.email "cicd-generator@megafon.ru"
-    - git config --global user.name "CICD Generator"
-  script:
-    - |
-      git clone "https://oauth2:${GITLAB_TUZ_TOKEN}@cicd-git.megafon.ru/${CORE_REPO_PATH}.git" core-repo
-      cd core-repo
-
-      # удаляем прежнюю запись этого проекта (upsert, без дублей при redeploy)
-      if [ -f services.yaml ]; then
-        awk -v n="${PROJECT_NAME}" '/^- /{drop=0} /^- name: /{if ($3==n) drop=1} !drop{print}' \
-          services.yaml > services.yaml.tmp && mv services.yaml.tmp services.yaml
-      fi
-
-      cat >> services.yaml <<EOF
-      - name: ${PROJECT_NAME}
-        type: ${TEMPLATE_TYPE}
-        project_id: ${MIDDLE_PROJECT_ID}
-        repo_url: ${MIDDLE_PROJECT_WEB}
-        config_repo_url: ${MIDDLECONF_PROJECT_WEB}
-        stands: [${DC_STANDS}]
-        databases:
-          postgresql: ${PG_ENABLED}
-          clickhouse: ${CH_ENABLED}
-          redis: ${REDIS_ENABLED}
-        created_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-        created_by: ${GITLAB_USER_LOGIN}
-      EOF
-
-      git add services.yaml
-      if git diff --cached --quiet; then
-        echo "services.yaml без изменений — коммит/пуш не требуется"
-      else
-        git commit -m "feat: register ${PROJECT_NAME}"
-        git push origin HEAD
-      fi
 
 
 register-in-dsl:

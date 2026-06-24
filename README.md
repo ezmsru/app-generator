@@ -58,15 +58,13 @@ generator/
 | `redis_enabled` / `redis_host` | boolean / string | `false` / `""` | Redis |
 | `s3_enabled` / `s3_endpoint_url` / `s3_bucket` / `s3_prefix` | boolean / string | `false` / `""` | S3 (токен доступа — из PAM: `<project_name>_s3_token`) |
 | `servicemonitor_enabled` | boolean | `false` | ServiceMonitor для Prometheus. При `true` → `serviceMonitor.enabled=true` в values; манифест из `templates/servicemonitor.yaml` (scrape `/eapi/<app>/manage/prometheus`) |
-| `core_repo_path` | string | `""` | `group/core-registry` для регистрации (пусто — не регистрировать) |
-| `product_name` | string | `""` | имя продукта для [job-dsl](https://cicd-git.megafon.ru/libs/cicd/nmf/nmf-job-dsl/-/tree/master/middle/itbigdata?ref_type=heads) (пусто — взять `project_name`) |
 | `delete_password` | string | `""` | пароль подтверждения удаления (нужен при `action=delete`; сверяется с masked-переменной `DELETE_PASSWORD`) |
 
 > Включённые (`*_enabled=true`) интеграции БД/Redis/S3 попадают в helm-values; выключенные — вырезаются целиком (вместе с PAM-секретом) на стадии `fill-config`, чтобы под не падал на отсутствующем секрете. Если `*_enabled=true`, соответствующие host/db обязательны — это проверяется в `validate-params`.
 
 ## Что делает pipeline
 
-Порядок стадий: `validate → create-repo → register-dsl → fill-config → fill-template → setup-webhook → register`.
+Порядок стадий: `validate → create-repo → register-dsl → fill-config → fill-template → setup-webhook`.
 
 1. **validate-params** — проверка имени (regex) и зависимостей (`*_enabled=true ⇒ host/db обязательны`), резолв/создание обеих групп (`middle/itbigdata/<group>` и `middleconf/itbigdata/<group>`), проверка что проект не существует ни в одной
 2. **create-repo** — создание **двух** репозиториев: app в `middle/...` и config в `middleconf/...`
@@ -74,7 +72,6 @@ generator/
 4. **fill-config** — Dockerfile + Helm chart из `middleconf/` в **middleconf-репозиторий**; копируются только те `<dc>-values.yaml`, которые соответствуют выбранному `deploy_stands` (развёрнутому в `DC_STANDS`); неиспользуемые интеграции (`*_enabled != true`) вырезаются из values по маркерам
 5. **fill-template** — копирование шаблона из `middle/<template>/` в **middle-репозиторий** (ветка `develop` + тег `0.0.1`)
 6. **setup-webhook** — webhook на **middle-репозиторий** (URL задан в job)
-7. **register-in-core** — запись в `services.yaml` ядра: `repo_url` = middle, `config_repo_url` = middleconf (если указан `core_repo_path`)
 
 ## Удаление репозитория
 
