@@ -23,6 +23,9 @@ service:
       targetPort: {{SERVICE_PORT}}
   type: ClusterIP
 
+serviceMonitor:
+  enabled: {{SERVICEMONITOR_ENABLED}}
+
 deployment:
   replicaCount: 1
   annotations:

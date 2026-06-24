@@ -57,6 +57,7 @@ generator/
 | `ch_enabled` / `ch_host` / `ch_db` | boolean / string | `false` / `""` | ClickHouse |
 | `redis_enabled` / `redis_host` | boolean / string | `false` / `""` | Redis |
 | `s3_enabled` / `s3_endpoint_url` / `s3_bucket` / `s3_prefix` | boolean / string | `false` / `""` | S3 (токен доступа — из PAM: `<project_name>_s3_token`) |
+| `servicemonitor_enabled` | boolean | `false` | ServiceMonitor для Prometheus. При `true` → `serviceMonitor.enabled=true` в values; манифест из `templates/servicemonitor.yaml` (scrape `/eapi/<app>/manage/prometheus`) |
 | `core_repo_path` | string | `""` | `group/core-registry` для регистрации (пусто — не регистрировать) |
 | `product_name` | string | `""` | имя продукта для job-dsl (пусто — взять `project_name`) |
 | `delete_password` | string | `""` | пароль подтверждения удаления (нужен при `action=delete`; сверяется с masked-переменной `DELETE_PASSWORD`) |

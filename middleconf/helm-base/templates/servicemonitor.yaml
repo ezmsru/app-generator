@@ -1,0 +1,19 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "helpers.app.name" . }}-servicemonitor
+  namespace: {{ $.Release.Namespace | quote }}
+  labels: {{ include "helpers.app.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "helpers.app.selectorLabels" . | nindent 6 }}
+  endpoints:
+    {{ range $item := $.Values.service.ports }}
+    - port: {{ $item.name | quote }}
+      interval: 15s
+      path: {{ print "/eapi/" }}{{ include "helpers.app.name" $ }}{{ print "/manage/prometheus" }}
+      honorLabels: true
+      targetPort: {{ $item.targetPort }}
+    {{- end -}}
+{{- end }}
