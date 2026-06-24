@@ -8,7 +8,7 @@ app.get("/", (req, res) => {
   res.json({ message: `Hello from ${config.APP_NAME}` });
 });
 
-app.get("/health", (req, res) => {
+app.get(["/health", "/manage/health"], (req, res) => {
   res.json({ status: "ok", app: config.APP_NAME });
 });
 

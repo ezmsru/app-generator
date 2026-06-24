@@ -7,5 +7,6 @@ app.include_router(router)
 
 
 @app.get("/health")
+@app.get("/manage/health")
 def health():
     return {"status": "ok", "app": settings.APP_NAME}

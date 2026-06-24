@@ -9,5 +9,6 @@ def root():
 
 
 @bp.route("/health")
+@bp.route("/manage/health")
 def health():
     return jsonify({"status": "ok"})

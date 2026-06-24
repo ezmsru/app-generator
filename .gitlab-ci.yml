@@ -4,7 +4,7 @@ spec:
     target_group_name:
       type: string
       default: cicdbigdata
-      description: "Группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (создастся, если нет)"
+      description: "🚀 ОСНОВНОЕ · группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (создастся, если нет)"
       regex: '^[a-z0-9][a-z0-9._-]*$'
     project_name:
       type: string
@@ -24,12 +24,12 @@ spec:
     pam_source:
       type: string
       default: ""
-      description: "Путь до секретов /MegaFon/Common/Data-Analytics/dev/<1 уровень>/<2 уровень(ИС)>/ (например: LLM/cost_scan)"
+      description: "🔐 PAM · путь до секретов /MegaFon/Common/Data-Analytics/<stand(подставляется автоматически)>/<1 уровень>/<2 родительский уровень>/ (например: LLM/cost_scan), где LLM - 1 ур, cost_scan - 2 ур."
     # --- PostgreSQL ---
     pg_enabled:
       type: boolean
       default: false
-      description: "Подключить PostgreSQL"
+      description: "🗄️ POSTGRESQL · подключить"
     pg_host:
       type: string
       default: ""
@@ -42,7 +42,7 @@ spec:
     ch_enabled:
       type: boolean
       default: false
-      description: "Подключить ClickHouse"
+      description: "🔶 CLICKHOUSE · подключить"
     ch_host:
       type: string
       default: ""
@@ -55,7 +55,7 @@ spec:
     redis_enabled:
       type: boolean
       default: false
-      description: "Подключить Redis"
+      description: "🧱 REDIS · подключить"
     redis_host:
       type: string
       default: ""
@@ -64,7 +64,7 @@ spec:
     s3_enabled:
       type: boolean
       default: false
-      description: "Подключить S3"
+      description: "☁️ S3 · подключить"
     s3_endpoint_url:
       type: string
       default: ""
@@ -81,7 +81,7 @@ spec:
     core_repo_path:
       type: string
       default: ""
-      description: "Путь к core-registry (group/project, пусто — не регистрировать)"
+      description: "📦 РЕГИСТРАЦИЯ · путь к core-registry (group/project, пусто — не регистрировать)"
     product_name:
       type: string
       default: ""
@@ -89,7 +89,7 @@ spec:
     helm_stands_dev:
       type: string
       default: vlg-t2-dc-s
-      description: "DC-стенды для dev/preprod"
+      description: "🎯 HELM-СТЕНДЫ · DC-стенды для dev/preprod"
       options: ["vlg-t2-dc-s", "vlg-t2-dc-l", "vlg-t2-dc-s,vlg-t2-dc-l"]
     helm_stands_prod:
       type: string
@@ -185,6 +185,35 @@ validate-params:
         [ -z "$S3_ENDPOINT_URL" ] && echo "ERROR: S3_ENABLED=true, но S3_ENDPOINT_URL пуст" && exit 1
         [ -z "$S3_BUCKET" ]       && echo "ERROR: S3_ENABLED=true, но S3_BUCKET пуст"       && exit 1
       fi
+      # PAM_SOURCE обязателен, если включена любая интеграция с секретом из PAM
+      if [ "$PG_ENABLED" = "true" ] || [ "$REDIS_ENABLED" = "true" ] || [ "$S3_ENABLED" = "true" ]; then
+        [ -z "$PAM_SOURCE" ] && echo "ERROR: включена интеграция с PAM-секретом (PG/Redis/S3), но PAM_SOURCE пуст" && exit 1
+      fi
+
+      # --- Соответствие сред DEPLOY_STANDS выбранным DC-стендам (по env-tier) ---
+      # У каждого DC-стенда env «вшит» в values: dev=vlg-t2-dc-s, preprod=vlg-t2-dc-l, prod=msk-p1-*.
+      # Для каждой выбранной среды должен быть выбран DC-стенд того же tier.
+      dc_tier() {
+        case "$1" in
+          vlg-t2-dc-s) echo dev ;;
+          vlg-t2-dc-l) echo preprod ;;
+          msk-p1-dm-gen|msk-p1-kb-gen) echo prod ;;
+          *) echo unknown ;;
+        esac
+      }
+      SELECTED_DCS="${HELM_STANDS_DEV},${HELM_STANDS_PROD}"
+      for env in $(echo "${DEPLOY_STANDS}" | tr ',' ' '); do
+        FOUND=0
+        for dc in $(echo "${SELECTED_DCS}" | tr ',' ' '); do
+          [ -z "$dc" ] && continue
+          [ "$(dc_tier "$dc")" = "$env" ] && FOUND=1 && break
+        done
+        if [ "$FOUND" = "0" ]; then
+          echo "ERROR: для среды '${env}' не выбран DC-стенд нужного tier"
+          echo "Подсказка: dev⇒vlg-t2-dc-s, preprod⇒vlg-t2-dc-l, prod⇒msk-p1-dm-gen/msk-p1-kb-gen"
+          exit 1
+        fi
+      done
 
       # --- Резолв/создание целевых групп: middle + middleconf ---
       # middle и middleconf — независимые root-группы с разными ТУЗами
@@ -238,8 +267,7 @@ validate-params:
           "${GITLAB_URL}/api/v4/projects/${ENCODED_PATH}")
 
         if [ "$HTTP_CODE" = "200" ]; then
-          echo "ERROR: Проект ${PROJECT_NAME} уже существует в ${GROUP_PATH}"
-          exit 1
+          echo "INFO: проект ${PROJECT_NAME} уже существует в ${GROUP_PATH} — будет переиспользован (идемпотентный redeploy)"
         fi
 
         UPPER=$(echo "$PARENT" | tr '[:lower:]' '[:upper:]')
@@ -261,8 +289,16 @@ create-repo:
     - apk add --no-cache curl jq
   script:
     - |
+      # get-or-create: если проект уже есть (redeploy) — переиспользуем, не создаём дубль
       create_project() {
-        local NS_ID="$1"; local DESC="$2"; local TOKEN="$3"
+        local NS_ID="$1"; local DESC="$2"; local TOKEN="$3"; local GROUP_PATH="$4"
+        local ENC; ENC=$(echo "${GROUP_PATH}/${PROJECT_NAME}" | sed 's|/|%2F|g')
+        local EXIST; EXIST=$(curl -s --header "PRIVATE-TOKEN: ${TOKEN}" \
+          "${GITLAB_URL}/api/v4/projects/${ENC}")
+        if [ "$(echo "$EXIST" | jq -r '.id // empty')" != "" ]; then
+          echo "$EXIST"
+          return 0
+        fi
         curl -s --request POST \
           --header "PRIVATE-TOKEN: ${TOKEN}" \
           --header "Content-Type: application/json" \
@@ -277,14 +313,14 @@ create-repo:
           "${GITLAB_URL}/api/v4/projects"
       }
 
-      R1=$(create_project "${MIDDLE_GROUP_ID}" "${TEMPLATE_TYPE} service (app)" "${GITLAB_TUZ_TOKEN}")
+      R1=$(create_project "${MIDDLE_GROUP_ID}" "${TEMPLATE_TYPE} service (app)" "${GITLAB_TUZ_TOKEN}" "${MIDDLE_GROUP_PATH}")
       MIDDLE_PROJECT_ID=$(echo "$R1" | jq -r '.id')
       MIDDLE_PROJECT_WEB=$(echo "$R1" | jq -r '.web_url')
       if [ "$MIDDLE_PROJECT_ID" = "null" ] || [ -z "$MIDDLE_PROJECT_ID" ]; then
         echo "ERROR создания middle:"; echo "$R1" | jq .; exit 1
       fi
 
-      R2=$(create_project "${MIDDLECONF_GROUP_ID}" "${TEMPLATE_TYPE} service (config)" "${GITLAB_MIDDLECONF_TUZ_TOKEN}")
+      R2=$(create_project "${MIDDLECONF_GROUP_ID}" "${TEMPLATE_TYPE} service (config)" "${GITLAB_MIDDLECONF_TUZ_TOKEN}" "${MIDDLECONF_GROUP_PATH}")
       MIDDLECONF_PROJECT_ID=$(echo "$R2" | jq -r '.id')
       MIDDLECONF_PROJECT_WEB=$(echo "$R2" | jq -r '.web_url')
       if [ "$MIDDLECONF_PROJECT_ID" = "null" ] || [ -z "$MIDDLECONF_PROJECT_ID" ]; then
@@ -310,13 +346,11 @@ create-repo:
 fill-template:
   stage: fill-template
   image: $CI_IMAGE
-  when: delayed
-  start_in: '1 minute'
+  # сериализуем параллельные запуски одного проекта (иначе гонка имён develop-N)
+  resource_group: "middle-${PROJECT_NAME}"
   needs:
     - job: create-repo
       artifacts: true
-    - register-in-dsl
-    - fill-config
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache git
@@ -329,6 +363,29 @@ fill-template:
 
       git clone "https://oauth2:${GITLAB_TUZ_TOKEN}@cicd-git.megafon.ru/${MIDDLE_GROUP_PATH}/${PROJECT_NAME}.git" new-project
 
+      # Ждём, пока инициализируется master (initialize_with_readme — асинхронно)
+      i=0
+      until git -C new-project rev-parse -q --verify origin/master >/dev/null 2>&1; do
+        i=$((i+1)); [ "$i" -gt 30 ] && { echo "ERROR: master не инициализировался за ~60с"; exit 1; }
+        echo "ждём инициализации репо (master)... попытка $i"; sleep 2
+        git -C new-project fetch -q origin || true
+      done
+
+      # Новая ветка на каждый запуск (старые не трогаем): develop → develop-2 → develop-3 ...
+      # Ответвляемся от README-коммита (чистая база).
+      cd new-project
+      ROOT=$(git rev-list --max-parents=0 origin/master | tail -1)
+      if ! git ls-remote --exit-code --heads origin develop >/dev/null 2>&1; then
+        TARGET_BRANCH="develop"; IDX=1
+      else
+        N=2
+        while git ls-remote --exit-code --heads origin "develop-${N}" >/dev/null 2>&1; do N=$((N+1)); done
+        TARGET_BRANCH="develop-${N}"; IDX="${N}"
+      fi
+      git checkout -b "${TARGET_BRANCH}" "${ROOT}"
+      echo "middle target branch: ${TARGET_BRANCH}"
+      cd ..
+
       cp -r "${TEMPLATE_DIR}"/. new-project/
 
       find new-project/ -type f \( -name "*.py" -o -name "*.java" -o -name "*.js" \
@@ -337,17 +394,27 @@ fill-template:
         -exec sed -i "s/{{PROJECT_NAME}}/${PROJECT_NAME}/g" {} +
 
       cd new-project
-      git checkout -b develop
       git add -A
-      git commit -m "feat: init from ${TEMPLATE_TYPE} template"
-      git push origin develop
-      git tag 0.0.1
-      git push origin 0.0.1
+      git commit -m "feat: init from ${TEMPLATE_TYPE} template (branch ${TARGET_BRANCH})"
+      git push origin "${TARGET_BRANCH}"
+
+      # Тег версии на каждую генерацию: develop→0.0.1, develop-N→0.0.N
+      TAG="0.0.${IDX}"
+      if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null \
+         || git ls-remote --exit-code --tags origin "${TAG}" >/dev/null 2>&1; then
+        echo "tag ${TAG} уже существует — пропуск"
+      else
+        git tag "${TAG}"
+        git push origin "${TAG}"
+        echo "tag ${TAG} → ${TARGET_BRANCH}"
+      fi
 
 
 fill-config:
   stage: fill-config
   image: $CI_IMAGE
+  # сериализуем параллельные запуски одного проекта (иначе гонка имён master-N)
+  resource_group: "middleconf-${PROJECT_NAME}"
   needs:
     - job: create-repo
       artifacts: true
@@ -359,6 +426,30 @@ fill-config:
   script:
     - |
       git clone "https://oauth2:${GITLAB_MIDDLECONF_TUZ_TOKEN}@cicd-git.megafon.ru/${MIDDLECONF_GROUP_PATH}/${PROJECT_NAME}.git" new-project
+
+      # Ждём, пока инициализируется master (initialize_with_readme — асинхронно)
+      i=0
+      until git -C new-project rev-parse -q --verify origin/master >/dev/null 2>&1; do
+        i=$((i+1)); [ "$i" -gt 30 ] && { echo "ERROR: master не инициализировался за ~60с"; exit 1; }
+        echo "ждём инициализации репо (master)... попытка $i"; sleep 2
+        git -C new-project fetch -q origin || true
+      done
+
+      # Новая ветка на каждый запуск (старые не трогаем): master → master-2 → master-3 ...
+      # master (только README) — первый прогон; далее ответвляемся от README-коммита.
+      cd new-project
+      ROOT=$(git rev-list --max-parents=0 origin/master | tail -1)
+      if [ "$(git rev-list --count origin/master)" = "1" ]; then
+        TARGET_BRANCH="master"
+        git checkout master
+      else
+        N=2
+        while git ls-remote --exit-code --heads origin "master-${N}" >/dev/null 2>&1; do N=$((N+1)); done
+        TARGET_BRANCH="master-${N}"
+        git checkout -b "${TARGET_BRANCH}" "${ROOT}"
+      fi
+      echo "middleconf target branch: ${TARGET_BRANCH}"
+      cd ..
 
       # Dockerfile
       cp "middleconf/${TEMPLATE_TYPE}/Dockerfile" new-project/Dockerfile
@@ -444,28 +535,32 @@ fill-config:
         *)    SERVICE_PORT=8000 ;;
       esac
 
-      # Подстановка плейсхолдеров
+      # Подстановка плейсхолдеров.
+      # Значения — свободный ввод, поэтому экранируем спецсимволы sed-замены (\ & |)
+      # и используем единый разделитель | (значения хостов/URL/путей могут содержать /).
+      esc() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
       find new-project/helm/ new-project/Dockerfile -type f -exec sed -i \
-        -e "s/{{PROJECT_NAME}}/${PROJECT_NAME}/g" \
-        -e "s/{{SERVICE_PORT}}/${SERVICE_PORT}/g" \
-        -e "s/{{PG_ENABLED}}/${PG_ENABLED}/g" \
-        -e "s/{{PG_HOST}}/${PG_HOST}/g" \
-        -e "s/{{PG_DB}}/${PG_DB}/g" \
-        -e "s/{{REDIS_ENABLED}}/${REDIS_ENABLED}/g" \
-        -e "s/{{REDIS_HOST}}/${REDIS_HOST}/g" \
-        -e "s/{{CH_ENABLED}}/${CH_ENABLED}/g" \
-        -e "s/{{CH_HOST}}/${CH_HOST}/g" \
-        -e "s/{{CH_DB}}/${CH_DB}/g" \
-        -e "s/{{S3_ENABLED}}/${S3_ENABLED}/g" \
-        -e "s|{{S3_ENDPOINT_URL}}|${S3_ENDPOINT_URL}|g" \
-        -e "s/{{S3_BUCKET}}/${S3_BUCKET}/g" \
-        -e "s|{{S3_PREFIX}}|${S3_PREFIX}|g" \
+        -e "s|{{PROJECT_NAME}}|$(esc "$PROJECT_NAME")|g" \
+        -e "s|{{SERVICE_PORT}}|$(esc "$SERVICE_PORT")|g" \
+        -e "s|{{PG_ENABLED}}|$(esc "$PG_ENABLED")|g" \
+        -e "s|{{PG_HOST}}|$(esc "$PG_HOST")|g" \
+        -e "s|{{PG_DB}}|$(esc "$PG_DB")|g" \
+        -e "s|{{REDIS_ENABLED}}|$(esc "$REDIS_ENABLED")|g" \
+        -e "s|{{REDIS_HOST}}|$(esc "$REDIS_HOST")|g" \
+        -e "s|{{CH_ENABLED}}|$(esc "$CH_ENABLED")|g" \
+        -e "s|{{CH_HOST}}|$(esc "$CH_HOST")|g" \
+        -e "s|{{CH_DB}}|$(esc "$CH_DB")|g" \
+        -e "s|{{S3_ENABLED}}|$(esc "$S3_ENABLED")|g" \
+        -e "s|{{S3_ENDPOINT_URL}}|$(esc "$S3_ENDPOINT_URL")|g" \
+        -e "s|{{S3_BUCKET}}|$(esc "$S3_BUCKET")|g" \
+        -e "s|{{S3_PREFIX}}|$(esc "$S3_PREFIX")|g" \
+        -e "s|{{PAM_SOURCE}}|$(esc "$PAM_SOURCE")|g" \
         {} +
 
       cd new-project
       git add -A
-      git commit -m "feat: middleconf (Dockerfile + mfactorylib helm, stands: ${DEPLOY_STANDS})"
-      git push origin master
+      git commit -m "feat: middleconf (Dockerfile + mfactorylib helm, stands: ${DEPLOY_STANDS}, branch ${TARGET_BRANCH})"
+      git push origin "${TARGET_BRANCH}"
 
 
 setup-webhook:
@@ -484,6 +579,15 @@ setup-webhook:
       set_webhook() {
         local PID="$1"; local TOKEN="$2"
         echo "=== webhook → project ${PID} ==="
+        # дедуп: если хук с таким URL уже есть — не плодим дубль
+        local EXISTING
+        EXISTING=$(curl -s --header "PRIVATE-TOKEN: ${TOKEN}" \
+          "${GITLAB_URL}/api/v4/projects/${PID}/hooks" \
+          | jq -r --arg u "${WEBHOOK_URL}" '.[] | select(.url==$u) | .id' | head -n1)
+        if [ -n "$EXISTING" ]; then
+          echo "webhook уже существует (id=${EXISTING}) — пропуск"
+          return 0
+        fi
         curl -s --request POST \
           --header "PRIVATE-TOKEN: ${TOKEN}" \
           --header "Content-Type: application/json" \
@@ -514,12 +618,18 @@ register-in-core:
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache git
-    - git config --global user.email "cicd-generator@megafon.ru"
+    - git config --global user.email "cicd-generator@megafon.ru"т
     - git config --global user.name "CICD Generator"
   script:
     - |
       git clone "https://oauth2:${GITLAB_TUZ_TOKEN}@cicd-git.megafon.ru/${CORE_REPO_PATH}.git" core-repo
       cd core-repo
+
+      # удаляем прежнюю запись этого проекта (upsert, без дублей при redeploy)
+      if [ -f services.yaml ]; then
+        awk -v n="${PROJECT_NAME}" '/^- /{drop=0} /^- name: /{if ($3==n) drop=1} !drop{print}' \
+          services.yaml > services.yaml.tmp && mv services.yaml.tmp services.yaml
+      fi
 
       cat >> services.yaml <<EOF
       - name: ${PROJECT_NAME}
@@ -537,8 +647,12 @@ register-in-core:
       EOF
 
       git add services.yaml
-      git commit -m "feat: register ${PROJECT_NAME}"
-      git push origin main
+      if git diff --cached --quiet; then
+        echo "services.yaml без изменений — коммит/пуш не требуется"
+      else
+        git commit -m "feat: register ${PROJECT_NAME}"
+        git push origin HEAD
+      fi
 
 
 register-in-dsl:
@@ -563,7 +677,7 @@ register-in-dsl:
       git clone --branch "${DSL_TARGET_BRANCH}" \
         "https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/${DSL_REPO_PATH}.git" dsl-repo
       cd dsl-repo
-      git checkout -b "${FEATURE_BRANCH}"
+      git checkout "${FEATURE_BRANCH}" 2>/dev/null || git checkout -b "${FEATURE_BRANCH}"
       mkdir -p "${DSL_FILE_DIR}"
       DSL_FILE="${DSL_FILE_DIR}/${PRODUCT}.yaml"
 
@@ -592,13 +706,18 @@ register-in-dsl:
               data = yaml.load(f) or {}
       else:
           data = {}
-      products = [p for p in (data.get("products") or []) if p.get("name") != service]
-      products.append(entry)
-      data["products"] = products
-      data.setdefault("conf", {}).setdefault("parameters", {}).setdefault("FORCE", False)
-
-      with path.open("w") as f:
-          yaml.dump(data, f)
+      products = data.get("products") or []
+      # Продукт вносится в job-dsl ОДИН раз. Если уже есть — ничего не меняем
+      # (даже при перераскатках): файл не трогаем, MR не создаётся.
+      if any(p.get("name") == service for p in products):
+          print(f"{service} уже зарегистрирован в job-dsl — изменений не вносим")
+      else:
+          products.append(entry)
+          data["products"] = products
+          data.setdefault("conf", {}).setdefault("parameters", {}).setdefault("FORCE", False)
+          with path.open("w") as f:
+              yaml.dump(data, f)
+          print(f"{service} добавлен в job-dsl")
       PYEOF
 
       git add "${DSL_FILE}"
