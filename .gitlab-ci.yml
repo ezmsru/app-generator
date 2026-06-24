@@ -1,14 +1,20 @@
 spec:
   inputs:
-    # --- Основное ---
+    # --- Режим ---
+    action:
+      type: string
+      default: create
+      description: "⚙️ РЕЖИМ · create — создать репозитории; delete — удалить. В обоих режимах цель задаётся полями project_name + target_group_name (ниже)"
+      options: ["create", "delete"]
+    # --- Основное / цель (для обоих режимов) ---
+    project_name:
+      type: string
+      description: "🎯 ЦЕЛЬ · имя репозитория (латиница, без пробелов). create — создаётся; delete — удаляется. Обязателен в обоих режимах"
+      regex: '^[a-z0-9][a-z0-9._-]*$'
     target_group_name:
       type: string
       default: cicdbigdata
-      description: "🚀 ОСНОВНОЕ · группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (создастся, если нет)"
-      regex: '^[a-z0-9][a-z0-9._-]*$'
-    project_name:
-      type: string
-      description: "Имя нового репозитория (латиница, без пробелов) — обязательно"
+      description: "🎯 ЦЕЛЬ · группа-продукт под middle/itbigdata/ и middleconf/itbigdata/. create — создастся, если нет; delete — группа, в которой лежит удаляемое репо (сама группа НЕ удаляется)"
       regex: '^[a-z0-9][a-z0-9._-]*$'
     template_type:
       type: string
@@ -96,6 +102,11 @@ spec:
       default: msk-p1-dm-gen
       description: "DC-стенды для prod"
       options: ["msk-p1-dm-gen", "msk-p1-kb-gen", "msk-p1-dm-gen,msk-p1-kb-gen"]
+    # --- Удаление (только при action=delete) ---
+    delete_password:
+      type: string
+      default: ""
+      description: "🗑️ УДАЛЕНИЕ · пароль подтверждения (нужен при action=delete; сверяется с masked CI-переменной DELETE_PASSWORD). Удаляются middle + middleconf репозитории project_name и строка в job-dsl; группа не трогается"
 ---
 include:
   - project: 'middle/itbigdata/devops_tools/gitlab-templates'
@@ -105,14 +116,14 @@ default:
   tags:
     - docker-abd
 
-# project_name — обязательный input, поэтому ограничиваем создание pipeline
-# ручным запуском (Run pipeline). Иначе push в репо породил бы pipeline,
-# который не сможет создаться без обязательного input.
+# Генератор управляется только ручным запуском (Run pipeline): и создание,
+# и удаление инициируются человеком через форму. Push в репо pipeline не порождает.
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "web"
 
 stages:
+  - delete
   - validate
   - create-repo
   - register-dsl
@@ -146,11 +157,16 @@ variables:
   PRODUCT_NAME: "$[[ inputs.product_name ]]"
   HELM_STANDS_DEV: "$[[ inputs.helm_stands_dev ]]"
   HELM_STANDS_PROD: "$[[ inputs.helm_stands_prod ]]"
+  ACTION: "$[[ inputs.action ]]"
+  # пароль из формы; сверяется с masked CI-переменной DELETE_PASSWORD (задаётся в Settings → CI/CD)
+  DELETE_PASSWORD_INPUT: "$[[ inputs.delete_password ]]"
 
 
 validate-params:
   stage: validate
   image: $CI_IMAGE
+  rules:
+    - if: $ACTION == "create"
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache curl jq
@@ -284,6 +300,8 @@ create-repo:
   stage: create-repo
   image: $CI_IMAGE
   needs: [validate-params]
+  rules:
+    - if: $ACTION == "create"
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache curl jq
@@ -351,6 +369,8 @@ fill-template:
   needs:
     - job: create-repo
       artifacts: true
+  rules:
+    - if: $ACTION == "create"
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache git
@@ -418,6 +438,8 @@ fill-config:
   needs:
     - job: create-repo
       artifacts: true
+  rules:
+    - if: $ACTION == "create"
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache git
@@ -569,6 +591,8 @@ setup-webhook:
   needs:
     - job: create-repo
       artifacts: true
+  rules:
+    - if: $ACTION == "create"
   variables:
     WEBHOOK_URL: "https://jenkins.middle.megafon.ru/cicd-lib-webhooker/gitlab"
   before_script:
@@ -614,11 +638,11 @@ register-in-core:
       artifacts: true
     - fill-config
   rules:
-    - if: $CORE_REPO_PATH != ""
+    - if: $CORE_REPO_PATH != "" && $ACTION == "create"
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
     - apk add --no-cache git
-    - git config --global user.email "cicd-generator@megafon.ru"т
+    - git config --global user.email "cicd-generator@megafon.ru"
     - git config --global user.name "CICD Generator"
   script:
     - |
@@ -661,6 +685,8 @@ register-in-dsl:
   needs:
     - job: create-repo
       artifacts: true
+  rules:
+    - if: $ACTION == "create"
   variables:
     DSL_REPO_PATH: "libs/cicd/nmf/nmf-job-dsl"
     DSL_FILE_DIR: "middle/itbigdata"
@@ -731,4 +757,150 @@ register-in-dsl:
         -o merge_request.create \
         -o merge_request.target="${DSL_TARGET_BRANCH}" \
         -o merge_request.title="feat: register ${PROJECT_NAME} in job-dsl" \
+        origin "${FEATURE_BRANCH}"
+
+
+# ============================================================================
+# РЕЖИМ УДАЛЕНИЯ (action=delete)
+# Цель задаётся теми же полями, что и при создании: project_name + target_group_name.
+# При action=delete ВСЕ обычные джобы исключены (rules: $ACTION == "create"),
+# выполняется только этот job: удаление репозиториев middle + middleconf и
+# строки из job-dsl. Сама группа НЕ удаляется (в ней могут быть другие проекты).
+# Требует подтверждения паролем: input delete_password должен совпасть с
+# masked CI-переменной DELETE_PASSWORD (Settings → CI/CD → Variables).
+# ============================================================================
+delete-repository:
+  stage: delete
+  image: $CI_IMAGE
+  rules:
+    - if: $ACTION == "delete"
+  variables:
+    DSL_REPO_PATH: "libs/cicd/nmf/nmf-job-dsl"
+    DSL_FILE_DIR: "middle/itbigdata"
+    DSL_TARGET_BRANCH: "master"
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache curl jq git python3 py3-ruamel.yaml
+    - git config --global user.email "it-reporting-deployment-devops@megafon.ru"
+    - git config --global user.name "CICD Generator"
+  script:
+    - |
+      # --- Валидация цели (в режиме delete validate-params не запускается) ---
+      [ -z "$PROJECT_NAME" ] && echo "ERROR: при action=delete заполните project_name (имя удаляемого репозитория)" && exit 1
+      if ! echo "$PROJECT_NAME" | grep -qE '^[a-z0-9][a-z0-9._-]*$'; then
+        echo "ERROR: project_name: только a-z, 0-9, ., -, _"
+        exit 1
+      fi
+      if ! echo "$TARGET_GROUP_NAME" | grep -qE '^[a-z0-9][a-z0-9._-]*$'; then
+        echo "ERROR: target_group_name: только a-z, 0-9, ., -, _"
+        exit 1
+      fi
+
+      # --- Проверка пароля ---
+      # DELETE_PASSWORD — masked CI-переменная (задаётся в Settings → CI/CD).
+      # Без неё удаление запрещено в принципе.
+      if [ -z "$DELETE_PASSWORD" ]; then
+        echo "ERROR: masked CI-переменная DELETE_PASSWORD не задана — удаление запрещено."
+        echo "Задайте её в Settings → CI/CD → Variables (masked)."
+        exit 1
+      fi
+      if [ "$DELETE_PASSWORD_INPUT" != "$DELETE_PASSWORD" ]; then
+        echo "ERROR: неверный пароль удаления."
+        exit 1
+      fi
+
+      PRODUCT="${PRODUCT_NAME:-$TARGET_GROUP_NAME}"
+
+      # --- Баннер: что именно будет удалено ---
+      echo "========================================"
+      echo "  РЕЖИМ УДАЛЕНИЯ"
+      echo "  middle    : middle/itbigdata/${TARGET_GROUP_NAME}/${PROJECT_NAME}"
+      echo "  middleconf: middleconf/itbigdata/${TARGET_GROUP_NAME}/${PROJECT_NAME}"
+      echo "  job-dsl   : middle/itbigdata/${PRODUCT}.yaml → продукт \"${PROJECT_NAME}\""
+      echo "  (группа ${TARGET_GROUP_NAME} НЕ удаляется)"
+      echo "========================================"
+
+      # --- Удаление проектов middle + middleconf ---
+      # middle и middleconf — независимые root-группы с разными ТУЗами.
+      delete_project() {
+        parent="$1"; token="$2"
+        proj_path="${parent}/itbigdata/${TARGET_GROUP_NAME}/${PROJECT_NAME}"
+        enc=$(echo "$proj_path" | sed 's|/|%2F|g')
+        [ -z "$token" ] && echo "ERROR: пустой токен для ${parent}" && exit 1
+
+        code=$(curl -s -o /dev/null -w "%{http_code}" \
+          --header "PRIVATE-TOKEN: ${token}" \
+          "${GITLAB_URL}/api/v4/projects/${enc}")
+        if [ "$code" = "404" ]; then
+          echo "INFO: ${proj_path} не найден (уже удалён?) — пропуск"
+          return 0
+        fi
+
+        resp=$(curl -s -w "\n%{http_code}" --request DELETE \
+          --header "PRIVATE-TOKEN: ${token}" \
+          "${GITLAB_URL}/api/v4/projects/${enc}")
+        dcode=$(echo "$resp" | tail -n1)
+        # 202 Accepted — удаление принято (GitLab удаляет асинхронно)
+        if [ "$dcode" = "202" ] || [ "$dcode" = "200" ] || [ "$dcode" = "204" ]; then
+          echo "OK: удаление ${proj_path} принято (HTTP ${dcode})"
+        else
+          echo "ERROR удаления ${proj_path} (HTTP ${dcode}):"
+          echo "$resp" | sed '$d'
+          exit 1
+        fi
+      }
+
+      delete_project middle     "${GITLAB_TUZ_TOKEN}"
+      delete_project middleconf "${GITLAB_MIDDLECONF_TUZ_TOKEN}"
+
+      # --- Удаление строки продукта из job-dsl (через MR) ---
+      FEATURE_BRANCH="feature/delete-${PROJECT_NAME}"
+      git clone --branch "${DSL_TARGET_BRANCH}" \
+        "https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/${DSL_REPO_PATH}.git" dsl-repo
+      cd dsl-repo
+      git checkout "${FEATURE_BRANCH}" 2>/dev/null || git checkout -b "${FEATURE_BRANCH}"
+      DSL_FILE="${DSL_FILE_DIR}/${PRODUCT}.yaml"
+
+      if [ ! -f "$DSL_FILE" ]; then
+        echo "INFO: ${DSL_FILE} отсутствует — нечего удалять из job-dsl"
+        exit 0
+      fi
+
+      python3 - <<PYEOF
+      from pathlib import Path
+      from ruamel.yaml import YAML
+
+      yaml = YAML()
+      yaml.preserve_quotes = True
+      yaml.explicit_start = True
+      yaml.width = 4096
+      yaml.indent(mapping=2, sequence=4, offset=2)
+
+      path = Path("${DSL_FILE}")
+      service = "${PROJECT_NAME}"
+
+      with path.open() as f:
+          data = yaml.load(f) or {}
+      products = data.get("products") or []
+      kept = [p for p in products if p.get("name") != service]
+      if len(kept) == len(products):
+          print(f"{service} не найден в job-dsl — изменений нет")
+      else:
+          data["products"] = kept
+          with path.open("w") as f:
+              yaml.dump(data, f)
+          print(f"{service} удалён из job-dsl")
+      PYEOF
+
+      git add "${DSL_FILE}"
+      if git diff --cached --quiet; then
+        echo "Нет изменений в ${DSL_FILE} — MR не требуется"
+        exit 0
+      fi
+
+      git commit -m "chore: remove ${PROJECT_NAME} from job-dsl"
+      git push \
+        -o merge_request.create \
+        -o merge_request.target="${DSL_TARGET_BRANCH}" \
+        -o merge_request.title="chore: remove ${PROJECT_NAME} from job-dsl" \
         origin "${FEATURE_BRANCH}"
