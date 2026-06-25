@@ -1,4 +1,5 @@
-{{- if (dig "serviceMonitor" "enabled" false .Values) }}
+{{- if .Values.serviceMonitor }}
+{{- if .Values.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -16,4 +17,5 @@ spec:
       honorLabels: true
       targetPort: {{ $item.targetPort }}
     {{- end -}}
+{{- end }}
 {{- end }}
