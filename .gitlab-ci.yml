@@ -413,11 +413,28 @@ fill-template:
         PUSH_REFS="${PUSH_REFS} ${TAG}"
       fi
 
-      # Пауза перед пушем: push триггерит деплой на стенд, а деплою нужен уже
-      # ВМЁРЖЕННЫЙ продукт в job-dsl. MR из register-in-dsl сливается через ~1.5 мин
-      # после стадии register-dsl — без паузы триггер срабатывает раньше регистрации.
-      echo "Ждём ~1.5 мин слияния MR в job-dsl перед пушем (иначе деплой-триггер не сработает)..."
-      sleep 90
+      # Перед пушем: push триггерит деплой на стенд, а деплою нужен уже ВМЁРЖЕННЫЙ
+      # продукт в job-dsl master (иначе сид не создал деплой-джобу и триггер уходит
+      # впустую). MR из register-in-dsl сливается за ~2 мин — фиксированный sleep
+      # ненадёжен, поэтому АДАПТИВНО ждём появления продукта в job-dsl master.
+      PRODUCT_DSL="${PRODUCT_NAME:-$TARGET_GROUP_NAME}"
+      DSL_GIT="https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/libs/cicd/nmf/nmf-job-dsl.git"
+      DSL_REL="middle/itbigdata/${PRODUCT_DSL}.yaml"
+      echo "Ждём регистрации ${PROJECT_NAME} в job-dsl master (слияние MR)..."
+      i=0
+      until rm -rf /tmp/dsl-poll && \
+            git clone -q --depth 1 --branch master "${DSL_GIT}" /tmp/dsl-poll 2>/dev/null && \
+            grep -q "\"${PROJECT_NAME}\"" "/tmp/dsl-poll/${DSL_REL}" 2>/dev/null; do
+        i=$((i+1))
+        if [ "$i" -gt 60 ]; then
+          echo "WARN: не дождались регистрации за ~5 мин — пушим всё равно"
+          break
+        fi
+        echo "  ещё не зарегистрирован, ждём... (попытка $i)"
+        sleep 5
+      done
+      rm -rf /tmp/dsl-poll
+      [ "$i" -le 60 ] && echo "OK: ${PROJECT_NAME} зарегистрирован в job-dsl master — пушим"
 
       # контент + тег одним пушем → branch-UPDATE, тег уже в репозитории к моменту вебхука
       git push origin ${PUSH_REFS}
