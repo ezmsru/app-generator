@@ -376,6 +376,14 @@ fill-template:
       fi
       git checkout -b "${TARGET_BRANCH}" "${ROOT}"
       echo "middle target branch: ${TARGET_BRANCH}"
+
+      # Создаём ветку отдельным пушем НА ROOT (без контента шаблона).
+      # Это branch-create (webhook: commit_previous_id=000…0) — деплой-хук такие
+      # события игнорирует, поэтому здесь триггер и не нужен.
+      # Содержимое шаблона + тег пушим следующим шагом: тогда это уже branch-UPDATE
+      # (commit_previous_id = реальный коммит ROOT), и деплой на стенд срабатывает.
+      git push origin "${TARGET_BRANCH}"
+      echo "ветка ${TARGET_BRANCH} создана на ROOT (branch-create, без триггера деплоя)"
       cd ..
 
       cp -r "${TEMPLATE_DIR}"/. new-project/
@@ -392,6 +400,8 @@ fill-template:
       # Тег версии создаём ДО пуша (develop→0.0.1, develop-N→0.0.N) и пушим ветку с тегом
       # ОДНОЙ операцией. Иначе webhook на push ветки срабатывает раньше пуша тега, и на
       # стороне деплоя 'git describe --tags' падает ("No names found").
+      # Ветка уже создана выше (на ROOT), поэтому этот пуш — branch-UPDATE: деплой
+      # видит реальный commit_previous_id и триггерит выкладку на стенд.
       TAG="0.0.${IDX}"
       PUSH_REFS="${TARGET_BRANCH}"
       if git ls-remote --exit-code --tags origin "${TAG}" >/dev/null 2>&1; then
@@ -407,9 +417,9 @@ fill-template:
       echo "Ждём ~1 мин слияния MR в job-dsl перед пушем (иначе деплой-триггер не сработает)..."
       sleep 60
 
-      # ветка + тег одним пушем → к моменту вебхука тег уже в репозитории
+      # контент + тег одним пушем → branch-UPDATE, тег уже в репозитории к моменту вебхука
       git push origin ${PUSH_REFS}
-      echo "pushed: ${PUSH_REFS}"
+      echo "pushed (branch-update): ${PUSH_REFS}"
 
 
 fill-config:
