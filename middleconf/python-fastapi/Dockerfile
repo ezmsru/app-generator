@@ -16,7 +16,8 @@ RUN --mount=type=secret,id=usr \
 
 WORKDIR /data/app
 
-# В контексте docker-сборки код приложения лежит под ./app (корень product-репо).
+# В контексте docker-сборки код приложения (middle-репо) смонтирован под ./app —
+# там pyproject.toml и модули приложения (плоская структура).
 COPY ./app/pyproject.toml /data/app/pyproject.toml
 
 RUN --mount=type=secret,id=usr \
@@ -25,7 +26,7 @@ RUN --mount=type=secret,id=usr \
     export UV_INDEX_ITBIGDATA_MAIN_PYPI_PASSWORD="$(cat /run/secrets/tok)"; \
     uv sync --no-install-project
 
-COPY ./app/app /data/app/app
+COPY ./app/ /data/app/
 
 
 FROM mf-ubi-target-docker-local.unixrepo.megafon.ru/python:3.12-slim-bookworm
@@ -45,4 +46,4 @@ USER 11200
 
 EXPOSE {{SERVICE_PORT}}
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "{{SERVICE_PORT}}"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "{{SERVICE_PORT}}"]
