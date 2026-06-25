@@ -649,6 +649,7 @@ register-in-dsl:
       DSL_FILE="${DSL_FILE_DIR}/${PRODUCT}.yaml"
 
       python3 - <<PYEOF
+      import io, re
       from pathlib import Path
       from ruamel.yaml import YAML
       from ruamel.yaml.scalarstring import DoubleQuotedScalarString as DQ
@@ -682,8 +683,21 @@ register-in-dsl:
           products.append(entry)
           data["products"] = products
           data.setdefault("conf", {}).setdefault("parameters", {}).setdefault("FORCE", False)
-          with path.open("w") as f:
-              yaml.dump(data, f)
+          # Дамп в строку, затем вставляем пустую строку перед каждым продуктом
+          # (кроме первого) — чтобы блоки в products разделялись пробелом.
+          buf = io.StringIO()
+          yaml.dump(data, buf)
+          lines = buf.getvalue().split("\n")
+          item_re = re.compile(r"^\s*-\s+name:")
+          out, first = [], True
+          for line in lines:
+              if item_re.match(line):
+                  if first:
+                      first = False
+                  elif out and out[-1].strip():
+                      out.append("")
+              out.append(line)
+          path.write_text("\n".join(out))
           print(f"{service} добавлен в job-dsl")
       PYEOF
 
