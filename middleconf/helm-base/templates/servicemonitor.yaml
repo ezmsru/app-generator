@@ -1,4 +1,4 @@
-{{- if .Values.serviceMonitor.enabled }}
+{{- if (dig "serviceMonitor" "enabled" false .Values) }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
