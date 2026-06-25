@@ -16,7 +16,8 @@ RUN --mount=type=secret,id=usr \
 
 WORKDIR /data/app
 
-COPY ./pyproject.toml /data/app/pyproject.toml
+# В контексте docker-сборки код приложения лежит под ./app (корень product-репо).
+COPY ./app/pyproject.toml /data/app/pyproject.toml
 
 RUN --mount=type=secret,id=usr \
     --mount=type=secret,id=tok \
@@ -24,7 +25,7 @@ RUN --mount=type=secret,id=usr \
     export UV_INDEX_ITBIGDATA_MAIN_PYPI_PASSWORD="$(cat /run/secrets/tok)"; \
     uv sync --no-install-project
 
-COPY ./app /data/app/app
+COPY ./app/app /data/app/app
 
 
 FROM mf-ubi-target-docker-local.unixrepo.megafon.ru/python:3.12-slim-bookworm

@@ -397,12 +397,14 @@ fill-template:
       git add -A
       git commit -m "feat: init from ${TEMPLATE_TYPE} template (branch ${TARGET_BRANCH})"
 
-      # Тег версии создаём ДО пуша (develop→0.0.1, develop-N→0.0.N) и пушим ветку с тегом
-      # ОДНОЙ операцией. Иначе webhook на push ветки срабатывает раньше пуша тега, и на
-      # стороне деплоя 'git describe --tags' падает ("No names found").
+      # Тег версии создаём ДО пуша (develop→1.0.0, develop-N→1.0.(N-1)) и пушим ветку
+      # с тегом ОДНОЙ операцией. Иначе webhook на push ветки срабатывает раньше пуша
+      # тега, и на стороне деплоя 'git describe --tags' падает ("No names found").
       # Ветка уже создана выше (на ROOT), поэтому этот пуш — branch-UPDATE: деплой
       # видит реальный commit_previous_id и триггерит выкладку на стенд.
-      TAG="0.0.${IDX}"
+      # MAJOR=1: деплой/сборка пропускает версии 0.0.x как не-релизные (триггер только
+      # с major>=1) — поэтому первый тег именно 1.0.0, а не 0.0.1.
+      TAG="1.0.$((IDX-1))"
       PUSH_REFS="${TARGET_BRANCH}"
       if git ls-remote --exit-code --tags origin "${TAG}" >/dev/null 2>&1; then
         echo "tag ${TAG} уже существует на origin — пушим только ветку"

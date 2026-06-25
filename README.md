@@ -70,7 +70,7 @@ generator/
 2. **create-repo** — создание **двух** репозиториев: app в `middle/...` и config в `middleconf/...`
 3. **register-in-dsl** — регистрация продукта в [`nmf-job-dsl`](https://cicd-git.megafon.ru/libs/cicd/nmf/nmf-job-dsl/-/tree/master/middle/itbigdata?ref_type=heads) (`middle/itbigdata/<product>.yaml`) через ruamel.yaml + автоматический MR
 4. **fill-config** — Dockerfile + Helm chart из `middleconf/` в **middleconf-репозиторий**; копируются только те `<dc>-values.yaml`, которые соответствуют выбранному `deploy_stands` (развёрнутому в `DC_STANDS`); неиспользуемые интеграции (`*_enabled != true`) вырезаются из values по маркерам
-5. **fill-template** — копирование шаблона из `middle/<template>/` в **middle-репозиторий** (ветка `develop` + тег `0.0.1`)
+5. **fill-template** — копирование шаблона из `middle/<template>/` в **middle-репозиторий** (ветка `develop` + тег `1.0.0`; major=1, иначе деплой считает версию не-релизной и не триггерится)
 6. **setup-webhook** — webhook на **middle-репозиторий** (URL задан в job)
 
 ## Удаление репозитория
