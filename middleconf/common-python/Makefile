@@ -41,8 +41,12 @@ pytest:
 unitTests:
 	@echo "тесты отключены"
 
+# buildApp складывает ВСЕ файлы для финального docker image в srcDirectory (app).
+# Библиотека вызывает этот таргет на стадии BuildApp; Dockerfile берёт код из ./app.
 buildApp:
-	@echo "Build step placeholder"
+	mkdir -p ${CURRENT_PWD}/app
+	cp -r ${CURRENT_PWD}/project ${CURRENT_PWD}/app/
+	cp ${CURRENT_PWD}/pyproject.toml ${CURRENT_PWD}/app/
 
 dev-attach:
 	docker pull ${BASE_DOCKER_IMAGE}

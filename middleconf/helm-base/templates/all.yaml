@@ -6,6 +6,7 @@
 {{- include "mfactorylib.default.pdb.tpl" . | nindent 0 }}
 {{- include "mfactorylib.default.vs.tpl" . | nindent 0 }}
 {{- include "mfactorylib.default.sa.tpl" . | nindent 0 }}
-{{- include "mfactorylib.default.sm.tpl" . | nindent 0 }}
+{{- /* ServiceMonitor задаём своим templates/servicemonitor.yaml (toggle serviceMonitor.enabled); библиотечный sm.tpl отключён, иначе дубль ресурса */}}
+{{- /* {{- include "mfactorylib.default.sm.tpl" . | nindent 0 }} */}}
 {{- include "mfactorylib.default.exsec.tpl" . | nindent 0 }}
 {{- include "mfactorylib.default.secstore.tpl" . | nindent 0 }}

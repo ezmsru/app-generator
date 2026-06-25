@@ -16,8 +16,8 @@ RUN --mount=type=secret,id=usr \
 
 WORKDIR /data/app
 
-# В контексте docker-сборки код приложения (middle-репо) смонтирован под ./app —
-# там pyproject.toml и модули приложения (плоская структура).
+# srcDirectory = ./app (наполняется make-таргетом buildApp): там pyproject.toml
+# и каталог project/ с модулями приложения.
 COPY ./app/pyproject.toml /data/app/pyproject.toml
 
 RUN --mount=type=secret,id=usr \
@@ -26,7 +26,8 @@ RUN --mount=type=secret,id=usr \
     export UV_INDEX_ITBIGDATA_MAIN_PYPI_PASSWORD="$(cat /run/secrets/tok)"; \
     uv sync --no-install-project
 
-COPY ./app/ /data/app/
+# Модули кладём плоско в /data/app (project/main.py → /data/app/main.py)
+COPY ./app/project/. /data/app/
 
 
 FROM mf-ubi-target-docker-local.unixrepo.megafon.ru/python:3.12-slim-bookworm
