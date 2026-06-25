@@ -49,7 +49,7 @@ generator/
 |---|---|---|---|
 | `action` | options | `create` | режим: `create` — создать репозитории; `delete` — удалить (нужен `delete_password`) |
 | `project_name` | string, **required**, regex `^[a-z0-9][a-z0-9._-]*$` | — | **цель** (для обоих режимов): имя репо. `create` — создаётся; `delete` — удаляется |
-| `target_group_name` | string, regex | `cicdbigdata` | **цель** (для обоих режимов): группа-продукт в `middle/itbigdata/` и `middleconf/itbigdata/`. `create` — создастся, если нет; `delete` — группа удаляемого репо (сама **не** удаляется) |
+| `target_group_name` | string, **required**, regex `^[a-z0-9][a-z0-9._-]*$` | — | **цель** (для обоих режимов): группа-продукт в `middle/itbigdata/` и `middleconf/itbigdata/` (например `cicdbigdata`). `create` — создастся, если нет; `delete` — группа удаляемого репо (сама **не** удаляется) |
 | `template_type` | options | `python-fastapi` | python-fastapi / python-flask / python-gunicorn / java / node |
 | `deploy_stands` | options | `DEV` | куда катим: `DEV` → `DEV + PREPROD` → `DEV + PREPROD + PROD`. В `validate-params` разворачивается в DC-стенды (`DEV`→`vlg-t2-dc-s`, `PREPROD`→`vlg-t2-dc-l`, `PROD`→`msk-p1-dm-gen,msk-p1-kb-gen`) = файлы `<dc>-values.yaml` |
 | `pam_source` | string | `""` | путь до секретов в PAM (например: `LLM/cost_scan`) |
@@ -58,7 +58,7 @@ generator/
 | `redis_enabled` / `redis_host` | boolean / string | `false` / `""` | Redis |
 | `s3_enabled` / `s3_endpoint_url` / `s3_bucket` / `s3_prefix` | boolean / string | `false` / `""` | S3 (токен доступа — из PAM: `<project_name>_s3_token`) |
 | `servicemonitor_enabled` | boolean | `false` | ServiceMonitor для Prometheus. При `true` → `serviceMonitor.enabled=true` в values; манифест из `templates/servicemonitor.yaml` (scrape `/eapi/<app>/manage/prometheus`) |
-| `delete_password` | string | `""` | пароль подтверждения удаления (нужен при `action=delete`; сверяется с masked-переменной `DELETE_PASSWORD`) |
+| `delete_password` | string | `""` | пароль подтверждения удаления (нужен при `action=delete`) |
 
 > Включённые (`*_enabled=true`) интеграции БД/Redis/S3 попадают в helm-values; выключенные — вырезаются целиком (вместе с PAM-секретом) на стадии `fill-config`, чтобы под не падал на отсутствующем секрете. Если `*_enabled=true`, соответствующие host/db обязательны — это проверяется в `validate-params`.
 
@@ -83,11 +83,11 @@ generator/
 |---|---|
 | `action` | `delete` |
 | `project_name` | имя удаляемого репо (как при создании) |
-| `target_group_name` | группа, в которой лежит репо (по умолчанию `cicdbigdata`) |
-| `delete_password` | пароль (сверяется с masked-переменной `DELETE_PASSWORD`) |
+| `target_group_name` | группа, в которой лежит репо (например `cicdbigdata`) |
+| `delete_password` | пароль подтверждения удаления |
 
 Что делает джоба:
-1. Валидирует `project_name`/`target_group_name` и сверяет `delete_password` с masked CI-переменной `DELETE_PASSWORD` (если переменная не задана — удаление запрещено).
+1. Валидирует `project_name`/`target_group_name` и проверяет пароль подтверждения (если пароль на стороне CI не задан — удаление запрещено).
 2. Печатает баннер с полными путями того, что будет удалено.
 3. Удаляет проекты `middle/itbigdata/<target_group_name>/<project_name>` и `middleconf/itbigdata/<target_group_name>/<project_name>` через GitLab API.
 4. Удаляет строку продукта из `nmf-job-dsl` (`middle/itbigdata/<product>.yaml`) через автоматический MR.

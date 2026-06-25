@@ -13,8 +13,7 @@ spec:
       regex: '^[a-z0-9][a-z0-9._-]*$'
     target_group_name:
       type: string
-      default: cicdbigdata
-      description: "🎯 ЦЕЛЬ · группа-продукт под middle/itbigdata/ и middleconf/itbigdata/. create — создастся, если нет; delete — группа, в которой лежит удаляемое репо (сама группа НЕ удаляется)"
+      description: "🎯 ЦЕЛЬ · группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (например: cicdbigdata). create — создастся, если нет; delete — группа, в которой лежит удаляемое репо (сама группа НЕ удаляется). Обязателен в обоих режимах"
       regex: '^[a-z0-9][a-z0-9._-]*$'
     template_type:
       type: string
@@ -95,7 +94,7 @@ spec:
     delete_password:
       type: string
       default: ""
-      description: "🗑️ УДАЛЕНИЕ · пароль подтверждения (нужен при action=delete; сверяется с masked CI-переменной DELETE_PASSWORD). Удаляются middle + middleconf репозитории project_name и строка в job-dsl; группа не трогается"
+      description: "🗑️ УДАЛЕНИЕ · пароль подтверждения (нужен при action=delete). Удаляются middle + middleconf репозитории project_name и строка в job-dsl; группа не трогается"
 ---
 include:
   - project: 'middle/itbigdata/devops_tools/gitlab-templates'
