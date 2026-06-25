@@ -8,11 +8,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE="copy" \
     PATH="/opt/venv/bin:$PATH"
 
-RUN --mount=type=secret,id=usr \
+RUN \
+    --mount=type=secret,id=usr \
     --mount=type=secret,id=tok \
-    usr=$(cat /run/secrets/usr) && tok=$(cat /run/secrets/tok) && \
+    user_var="$(cat /run/secrets/usr)" \
+    token_var="$(cat /run/secrets/tok)" && \
     pip3 install --no-cache-dir uv \
-      --index-url "https://${usr}:${tok}@unixrepo.megafon.ru/artifactory/api/pypi/itbigdata-main-pypi/simple"
+    --index-url=https://${user_var}:${token_var}@unixrepo.megafon.ru/artifactory/api/pypi/itbigdata-main-pypi/simple
 
 WORKDIR /data/app
 
@@ -20,11 +22,13 @@ WORKDIR /data/app
 # и каталог project/ с модулями приложения.
 COPY ./app/pyproject.toml /data/app/pyproject.toml
 
-RUN --mount=type=secret,id=usr \
+RUN \
+    --mount=type=secret,id=usr \
     --mount=type=secret,id=tok \
-    export UV_INDEX_ITBIGDATA_MAIN_PYPI_USERNAME="$(cat /run/secrets/usr)"; \
-    export UV_INDEX_ITBIGDATA_MAIN_PYPI_PASSWORD="$(cat /run/secrets/tok)"; \
-    uv sync --no-install-project
+    user_var="$(cat /run/secrets/usr)" \
+    token_var="$(cat /run/secrets/tok)" && \
+    uv sync --no-install-project \
+    --default-index=https://${user_var}:${token_var}@unixrepo.megafon.ru/artifactory/api/pypi/itbigdata-main-pypi/simple
 
 # Модули кладём плоско в /data/app (project/main.py → /data/app/main.py)
 COPY ./app/project/. /data/app/
