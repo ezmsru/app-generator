@@ -4,33 +4,34 @@ USER 0
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
+    UV_PROJECT_ENVIRONMENT="/opt/venv" \
+    UV_LINK_MODE="copy" \
     PATH="/opt/venv/bin:$PATH"
 
 RUN --mount=type=secret,id=usr \
     --mount=type=secret,id=tok \
     usr=$(cat /run/secrets/usr) && tok=$(cat /run/secrets/tok) && \
-    pip3 config set global.index-url \
-      "https://${usr}:${tok}@unixrepo.megafon.ru/artifactory/api/pypi/itbigdata-main-pypi/simple" && \
-    python -m venv /opt/venv
+    pip3 install --no-cache-dir uv \
+      --index-url "https://${usr}:${tok}@unixrepo.megafon.ru/artifactory/api/pypi/itbigdata-main-pypi/simple"
 
 WORKDIR /data/app
-COPY ./app/requirements.txt /data/app/requirements.txt
+
+COPY ./pyproject.toml /data/app/pyproject.toml
 
 RUN --mount=type=secret,id=usr \
     --mount=type=secret,id=tok \
-    usr=$(cat /run/secrets/usr) && tok=$(cat /run/secrets/tok) && \
-    /opt/venv/bin/pip install --no-cache-dir \
-      --index-url "https://${usr}:${tok}@unixrepo.megafon.ru/artifactory/api/pypi/itbigdata-main-pypi/simple" \
-      -r requirements.txt
+    export UV_INDEX_ITBIGDATA_MAIN_PYPI_USERNAME="$(cat /run/secrets/usr)"; \
+    export UV_INDEX_ITBIGDATA_MAIN_PYPI_PASSWORD="$(cat /run/secrets/tok)"; \
+    uv sync --no-install-project
 
-COPY ./app /data/app
+COPY ./app /data/app/app
 
 
 FROM mf-ubi-target-docker-local.unixrepo.megafon.ru/python:3.12-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:$PATH"
+    PATH="/opt/venv/bin:$PATH" \
+    UV_PROJECT_ENVIRONMENT="/opt/venv"
 
 WORKDIR /data/app
 
@@ -43,4 +44,4 @@ USER 11200
 
 EXPOSE {{SERVICE_PORT}}
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "{{SERVICE_PORT}}"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "{{SERVICE_PORT}}"]

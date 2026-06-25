@@ -1,0 +1,15 @@
+[project]
+name = "{{PROJECT_NAME}}"
+version = "0.1.0"
+description = "{{PROJECT_NAME}} service"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn==0.30.0",
+    "pydantic-settings==2.5.0",
+]
+
+[tool.uv]
+# приложение, а не библиотека: сам проект не пакуем/не ставим,
+# uv sync ставит только зависимости в /opt/venv
+package = false

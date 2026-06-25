@@ -390,7 +390,7 @@ fill-template:
 
       find new-project/ -type f \( -name "*.py" -o -name "*.java" -o -name "*.js" \
         -o -name "*.json" -o -name "*.xml" -o -name "*.yml" -o -name "*.yaml" \
-        -o -name "*.txt" -o -name "*.md" \) \
+        -o -name "*.toml" -o -name "*.txt" -o -name "*.md" \) \
         -exec sed -i "s/{{PROJECT_NAME}}/${PROJECT_NAME}/g" {} +
 
       cd new-project
