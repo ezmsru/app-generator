@@ -363,27 +363,19 @@ fill-template:
         git -C new-project fetch -q origin || true
       done
 
-      # Новая ветка на каждый запуск (старые не трогаем): develop → develop-2 → develop-3 ...
+      # Ветка на каждый запуск (старые не трогаем): develop → develop-2 → develop-3 ...
       # Ответвляемся от README-коммита (чистая база).
       cd new-project
       ROOT=$(git rev-list --max-parents=0 origin/master | tail -1)
       if ! git ls-remote --exit-code --heads origin develop >/dev/null 2>&1; then
-        TARGET_BRANCH="develop"; IDX=1
+        TARGET_BRANCH="develop"
       else
         N=2
         while git ls-remote --exit-code --heads origin "develop-${N}" >/dev/null 2>&1; do N=$((N+1)); done
-        TARGET_BRANCH="develop-${N}"; IDX="${N}"
+        TARGET_BRANCH="develop-${N}"
       fi
       git checkout -b "${TARGET_BRANCH}" "${ROOT}"
       echo "middle target branch: ${TARGET_BRANCH}"
-
-      # Создаём ветку отдельным пушем НА ROOT (без контента шаблона).
-      # Это branch-create (webhook: commit_previous_id=000…0) — деплой-хук такие
-      # события игнорирует, поэтому здесь триггер и не нужен.
-      # Содержимое шаблона + тег пушим следующим шагом: тогда это уже branch-UPDATE
-      # (commit_previous_id = реальный коммит ROOT), и деплой на стенд срабатывает.
-      git push origin "${TARGET_BRANCH}"
-      echo "ветка ${TARGET_BRANCH} создана на ROOT (branch-create, без триггера деплоя)"
       cd ..
 
       cp -r "${TEMPLATE_DIR}"/. new-project/
@@ -397,48 +389,54 @@ fill-template:
       git add -A
       git commit -m "feat: init from ${TEMPLATE_TYPE} template (branch ${TARGET_BRANCH})"
 
-      # Тег версии создаём ДО пуша (develop→1.0.0, develop-N→1.0.(N-1)) и пушим ветку
-      # с тегом ОДНОЙ операцией. Иначе webhook на push ветки срабатывает раньше пуша
-      # тега, и на стороне деплоя 'git describe --tags' падает ("No names found").
-      # Ветка уже создана выше (на ROOT), поэтому этот пуш — branch-UPDATE: деплой
-      # видит реальный commit_previous_id и триггерит выкладку на стенд.
-      # MAJOR=1: деплой/сборка пропускает версии 0.0.x как не-релизные (триггер только
-      # с major>=1) — поэтому первый тег именно 1.0.0, а не 0.0.1.
-      TAG="1.0.$((IDX-1))"
-      PUSH_REFS="${TARGET_BRANCH}"
-      if git ls-remote --exit-code --tags origin "${TAG}" >/dev/null 2>&1; then
-        echo "tag ${TAG} уже существует на origin — пушим только ветку"
-      else
-        git tag "${TAG}"
-        PUSH_REFS="${PUSH_REFS} ${TAG}"
-      fi
+      # Две последовательные свободные версии 1.0.X (теги репо-глобальные).
+      # MAJOR>=1: деплой/сборка пропускает 0.0.x как не-релизные.
+      LAST=$(git ls-remote --tags origin '1.0.*' 2>/dev/null \
+        | sed 's#.*refs/tags/1\.0\.##; s/\^{}//' | grep -E '^[0-9]+$' | sort -n | tail -1)
+      LAST=${LAST:--1}
+      SETUP_TAG="1.0.$((LAST+1))"
+      TRIGGER_TAG="1.0.$((LAST+2))"
 
-      # Перед пушем: push триггерит деплой на стенд, а деплою нужен уже ВМЁРЖЕННЫЙ
-      # продукт в job-dsl master (иначе сид не создал деплой-джобу и триггер уходит
-      # впустую). MR из register-in-dsl сливается за ~2 мин — фиксированный sleep
-      # ненадёжен, поэтому АДАПТИВНО ждём появления продукта в job-dsl master.
+      # 1) SETUP-пуш: ветка + контент шаблона + первый тег. Заводит репозиторий/ветку
+      #    и первую версию. Деплой тут может НЕ сработать — Jenkins-сид ещё не создал
+      #    деплой-джобу из обновлённого job-dsl (продукт только мёржится).
+      git tag "${SETUP_TAG}"
+      git push origin "${TARGET_BRANCH}" "${SETUP_TAG}"
+      echo "setup pushed: ${TARGET_BRANCH} + ${SETUP_TAG}"
+
+      # 2) Ждём появления продукта в job-dsl master (MR из register-in-dsl ~2 мин).
       PRODUCT_DSL="${PRODUCT_NAME:-$TARGET_GROUP_NAME}"
       DSL_GIT="https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/libs/cicd/nmf/nmf-job-dsl.git"
       DSL_REL="middle/itbigdata/${PRODUCT_DSL}.yaml"
-      echo "Ждём регистрации ${PROJECT_NAME} в job-dsl master (слияние MR)..."
+      echo "Ждём регистрации ${PROJECT_NAME} в job-dsl master..."
       i=0
       until rm -rf /tmp/dsl-poll && \
             git clone -q --depth 1 --branch master "${DSL_GIT}" /tmp/dsl-poll 2>/dev/null && \
             grep -q "\"${PROJECT_NAME}\"" "/tmp/dsl-poll/${DSL_REL}" 2>/dev/null; do
         i=$((i+1))
         if [ "$i" -gt 60 ]; then
-          echo "WARN: не дождались регистрации за ~5 мин — пушим всё равно"
+          echo "WARN: не дождались регистрации за ~5 мин — продолжаем"
           break
         fi
         echo "  ещё не зарегистрирован, ждём... (попытка $i)"
         sleep 5
       done
       rm -rf /tmp/dsl-poll
-      [ "$i" -le 60 ] && echo "OK: ${PROJECT_NAME} зарегистрирован в job-dsl master — пушим"
+      [ "$i" -le 60 ] && echo "OK: продукт в job-dsl master"
 
-      # контент + тег одним пушем → branch-UPDATE, тег уже в репозитории к моменту вебхука
-      git push origin ${PUSH_REFS}
-      echo "pushed (branch-update): ${PUSH_REFS}"
+      # 3) Буфер: после изменения job-dsl Jenkins-сид создаёт деплой-джобу не мгновенно.
+      echo "Ждём ~90с создания деплой-джобы Jenkins-сидом..."
+      sleep 90
+
+      # 4) TRIGGER-пуш: эмулируем ручное «новый коммит + новый тег в develop» — теперь
+      #    деплой-джоба уже существует и хук гарантированно её триггерит (branch-UPDATE
+      #    с реальным commit_previous_id и новым тегом). Меняем VERSION для непустого диффа.
+      printf '%s\n' "${TRIGGER_TAG}" > VERSION
+      git add VERSION
+      git commit -m "chore: trigger deploy ${TRIGGER_TAG}"
+      git tag "${TRIGGER_TAG}"
+      git push origin "${TARGET_BRANCH}" "${TRIGGER_TAG}"
+      echo "trigger pushed (branch-update + ${TRIGGER_TAG}) — деплой должен стартовать"
 
 
 fill-config:
