@@ -43,10 +43,13 @@ unitTests:
 
 # buildApp складывает ВСЕ файлы для финального docker image в srcDirectory (app).
 # Библиотека вызывает этот таргет на стадии BuildApp; Dockerfile берёт код из ./app.
+# Универсально для всех python-шаблонов: исходники всегда в project/, а манифест
+# зависимостей — либо pyproject.toml (uv, fastapi), либо requirements.txt (flask/gunicorn).
 buildApp:
 	mkdir -p ${CURRENT_PWD}/app
 	cp -r ${CURRENT_PWD}/project ${CURRENT_PWD}/app/
-	cp ${CURRENT_PWD}/pyproject.toml ${CURRENT_PWD}/app/
+	[ -f ${CURRENT_PWD}/pyproject.toml ] && cp ${CURRENT_PWD}/pyproject.toml ${CURRENT_PWD}/app/ || true
+	[ -f ${CURRENT_PWD}/requirements.txt ] && cp ${CURRENT_PWD}/requirements.txt ${CURRENT_PWD}/app/ || true
 
 dev-attach:
 	docker pull ${BASE_DOCKER_IMAGE}

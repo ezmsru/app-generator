@@ -24,7 +24,10 @@ RUN --mount=type=secret,id=usr \
       --index-url "https://${usr}:${tok}@unixrepo.megafon.ru/artifactory/api/pypi/itbigdata-main-pypi/simple" \
       -r requirements.txt
 
-COPY ./app /data/app
+# Модули кладём плоско в /data/app (project/main.py → /data/app/main.py,
+# project/gunicorn.conf.py → /data/app/gunicorn.conf.py).
+# srcDirectory=app наполняется make-таргетом buildApp: app/project/ + app/requirements.txt.
+COPY ./app/project/. /data/app/
 
 
 FROM mf-ubi-target-docker-local.unixrepo.megafon.ru/python:3.12-slim-bookworm
@@ -43,4 +46,4 @@ USER 11200
 
 EXPOSE {{SERVICE_PORT}}
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["gunicorn", "-c", "gunicorn.conf.py", "app:create_app()"]
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "main:app"]
