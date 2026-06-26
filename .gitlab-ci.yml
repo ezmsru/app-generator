@@ -516,6 +516,18 @@ fill-template:
       git push origin "${TARGET_BRANCH}" "${TAG}"
       echo "trigger pushed (branch-update + ${TAG}) — деплой должен стартовать"
 
+      # 5) Делаем ветку с контентом дефолтной в app-репо.
+      #    Иначе при клоне разработчик попадает на master (только README) и думает,
+      #    что «ничего не создалось». master НЕ удаляем — prod-flow (MR в master)
+      #    остаётся рабочим, просто он больше не дефолтный.
+      if curl -sf --request PUT --header "PRIVATE-TOKEN: ${GITLAB_TUZ_TOKEN}" \
+           --data "default_branch=${TARGET_BRANCH}" \
+           "${GITLAB_URL}/api/v4/projects/${MIDDLE_PROJECT_ID}" >/dev/null; then
+        echo "default branch app-репо → ${TARGET_BRANCH}"
+      else
+        echo "WARN: не удалось сменить default branch на ${TARGET_BRANCH} (проверьте права ТУЗа)"
+      fi
+
 
 fill-config:
   stage: fill-config
