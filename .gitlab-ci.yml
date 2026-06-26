@@ -430,7 +430,9 @@ fill-template:
       #    появление джобы именно "${PROJECT_NAME}" внутри неё, а не саму папку.
       #    Авторизация ТУЗа — basic auth (UNIXREPO_USER + MF_BDATA_TUZ_PASSWORD).
       #    Если переменные не заданы — откатываемся на фиксированный буфер.
-      JENKINS_FOLDER="https://jenkins.middle.megafon.ru/job/middle/job/itbigdata/${TARGET_GROUP_NAME}"
+      # ВАЖНО: в Jenkins каждый вложенный уровень адресуется через /job/<name>,
+      # поэтому перед сегментом ИС тоже нужен /job/ (.../job/itbigdata/job/<ИС>).
+      JENKINS_FOLDER="https://jenkins.middle.megafon.ru/job/middle/job/itbigdata/job/${TARGET_GROUP_NAME}"
       if [ -n "${UNIXREPO_USER}" ] && [ -n "${MF_BDATA_TUZ_PASSWORD}" ]; then
         echo "Ждём создания деплой-джобы ${PROJECT_NAME} в Jenkins (${JENKINS_FOLDER})..."
         JAPI="${JENKINS_FOLDER}/api/json?tree=jobs[name]"
