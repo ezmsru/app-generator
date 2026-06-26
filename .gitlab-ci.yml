@@ -7,14 +7,19 @@ spec:
       description: "⚙️ РЕЖИМ · create — создать репозитории; delete — удалить. В обоих режимах цель задаётся полями project_name + target_group_name (ниже)"
       options: ["create", "delete"]
     # --- Основное / цель (для обоих режимов) ---
+    # default: "" обязателен — без него push в репо генератора падает с
+    # "Unable to create pipeline" (инпуты интерполируются ДО workflow:rules).
+    # Пустой regex разрешён; реальную обязательность проверяет validate-params/delete.
     project_name:
       type: string
+      default: ""
       description: "🎯 ЦЕЛЬ · имя репозитория (латиница, без пробелов). create — создаётся; delete — удаляется. Обязателен в обоих режимах"
-      regex: '^[a-z0-9][a-z0-9._-]*$'
+      regex: '^([a-z0-9][a-z0-9._-]*)?$'
     target_group_name:
       type: string
+      default: ""
       description: "🎯 ЦЕЛЬ · группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (например: cicdbigdata). create — создастся, если нет; delete — группа, в которой лежит удаляемое репо (сама группа НЕ удаляется). Обязателен в обоих режимах"
-      regex: '^[a-z0-9][a-z0-9._-]*$'
+      regex: '^([a-z0-9][a-z0-9._-]*)?$'
     template_type:
       type: string
       default: python-fastapi
