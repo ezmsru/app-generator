@@ -9,17 +9,17 @@ spec:
     # --- Основное / цель (для обоих режимов) ---
     # default: "" обязателен — без него push в репо генератора падает с
     # "Unable to create pipeline" (инпуты интерполируются ДО workflow:rules).
-    # Пустой regex разрешён; реальную обязательность проверяет validate-params/delete.
+    # input-regex НЕ задаём: GitLab требует, чтобы default матчил regex, а пустой
+    # default ему не нравится. Формат имени проверяет validate-params/delete (там
+    # тот же regex + проверка на пусто) — обязательность сохранена.
     project_name:
       type: string
       default: ""
-      description: "🎯 ЦЕЛЬ · имя репозитория (латиница, без пробелов). create — создаётся; delete — удаляется. Обязателен в обоих режимах"
-      regex: '^([a-z0-9][a-z0-9._-]*)?$'
+      description: "🎯 ЦЕЛЬ · имя репозитория (латиница a-z 0-9 . _ -, без пробелов). create — создаётся; delete — удаляется. Обязателен в обоих режимах"
     target_group_name:
       type: string
       default: ""
       description: "🎯 ЦЕЛЬ · группа-продукт под middle/itbigdata/ и middleconf/itbigdata/ (например: cicdbigdata). create — создастся, если нет; delete — группа, в которой лежит удаляемое репо (сама группа НЕ удаляется). Обязателен в обоих режимах"
-      regex: '^([a-z0-9][a-z0-9._-]*)?$'
     template_type:
       type: string
       default: python-fastapi
