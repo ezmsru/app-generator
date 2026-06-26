@@ -398,13 +398,19 @@ fill-template:
         -o -name "*.toml" -o -name "*.txt" -o -name "*.md" \) \
         -exec sed -i "s/{{PROJECT_NAME}}/${PROJECT_NAME}/g" {} +
 
-      # Контент готовим ЛОКАЛЬНО (без пуша): ветка + шаблон + коммит.
+      # Контент: ветка + шаблон + коммит.
       cd new-project
       git add -A
       git commit -m "feat: init from ${TEMPLATE_TYPE} template (branch ${TARGET_BRANCH})"
 
+      # 0) PUSH 1 — создаём ветку на удалёнке (branch-CREATE, commit_previous_id=0000…0).
+      #    Деплой такие события ИГНОРИРУЕТ by design — это нормально, тег здесь НЕ вешаем.
+      #    Нужен лишь чтобы триггерящий push (ниже) был branch-UPDATE существующей ветки.
+      git push origin "${TARGET_BRANCH}"
+      echo "branch pushed (create): ${TARGET_BRANCH} — деплой это событие игнорирует, ждём джобу"
+
       # 1) Ждём появления продукта в job-dsl master (MR из register-in-dsl ~2 мин).
-      #    Пуш ветки делаем ПОЗЖЕ — чтобы единственный push пришёл уже после того,
+      #    Триггерящий push делаем ПОЗЖЕ — чтобы он пришёл уже после того,
       #    как Jenkins-сид создал деплой-джобу (иначе хук уходит впустую).
       PRODUCT_DSL="${PRODUCT_NAME:-$TARGET_GROUP_NAME}"
       DSL_GIT="https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/libs/cicd/nmf/nmf-job-dsl.git"
@@ -473,11 +479,16 @@ fill-template:
       LAST=${LAST:--1}
       TAG="1.0.$((LAST+1))"
 
-      # 4) Создаём тег, затем ОДИН отложенный push (ветка + тег) — деплой-джоба уже
-      #    существует, хук гарантированно её триггерит. Один тег на прогон.
+      # 4) PUSH 2 (триггер) — ТОЛЬКО СЕЙЧАС, когда деплой-джоба в Jenkins уже есть.
+      #    Делаем НОВЫЙ коммит (двигаем ref ветки) + тег и пушим: для вебхукера это
+      #    branch-UPDATE с реальным commit_previous_id → деплой стартует.
+      #    Это и есть автоэмуляция ручного «новый коммит + тег в develop».
+      printf '%s\n' "${TAG}" > VERSION
+      git add VERSION
+      git commit -m "chore: trigger deploy ${TAG}"
       git tag "${TAG}"
       git push origin "${TARGET_BRANCH}" "${TAG}"
-      echo "pushed: ${TARGET_BRANCH} + ${TAG} — деплой должен стартовать"
+      echo "trigger pushed (branch-update + ${TAG}) — деплой должен стартовать"
 
 
 fill-config:
