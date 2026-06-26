@@ -433,19 +433,30 @@ fill-template:
       JENKINS_FOLDER="https://jenkins.middle.megafon.ru/job/middle/job/itbigdata/${TARGET_GROUP_NAME}"
       if [ -n "${UNIXREPO_USER}" ] && [ -n "${MF_BDATA_TUZ_PASSWORD}" ]; then
         echo "Ждём создания деплой-джобы ${PROJECT_NAME} в Jenkins (${JENKINS_FOLDER})..."
+        JAPI="${JENKINS_FOLDER}/api/json?tree=jobs[name]"
         j=0
-        until curl -sf -u "${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}" \
-                "${JENKINS_FOLDER}/api/json?tree=jobs[name]" 2>/dev/null \
-                | grep -q "\"name\":\"${PROJECT_NAME}\""; do
-          j=$((j+1))
-          if [ "$j" -gt 60 ]; then
-            echo "WARN: джоба ${PROJECT_NAME} не появилась в Jenkins за ~5 мин — продолжаем"
+        while :; do
+          # -L: следуем редиректам; код и тело разбираем отдельно, чтобы видеть,
+          # 200 это / 401 / 403 / редирект, а не молча падать как раньше (-sf).
+          RESP=$(curl -sS -L -w '\n%{http_code}' \
+            -u "${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}" "${JAPI}" 2>/dev/null || true)
+          CODE=$(printf '%s' "${RESP}" | tail -n1)
+          BODY=$(printf '%s' "${RESP}" | sed '$d')
+          if [ "${CODE}" = "200" ] && printf '%s' "${BODY}" | grep -q "\"name\":\"${PROJECT_NAME}\""; then
+            echo "OK: деплой-джоба ${PROJECT_NAME} создана в Jenkins"
             break
           fi
-          echo "  джобы ещё нет, ждём... (попытка $j)"
+          j=$((j+1))
+          if [ "${j}" = 1 ]; then
+            echo "  диагностика: HTTP=${CODE}; первые 200 симв.: $(printf '%s' "${BODY}" | tr '\n' ' ' | head -c 200)"
+          fi
+          if [ "${j}" -gt 60 ]; then
+            echo "WARN: джоба ${PROJECT_NAME} не появилась за ~5 мин (последний HTTP=${CODE}) — продолжаем"
+            break
+          fi
+          echo "  джобы ещё нет (HTTP=${CODE}), ждём... (попытка ${j})"
           sleep 5
         done
-        [ "$j" -le 60 ] && echo "OK: деплой-джоба ${PROJECT_NAME} создана в Jenkins"
         # Небольшая страховка: даём сиду дорегистрировать триггеры джобы.
         sleep 10
       else
