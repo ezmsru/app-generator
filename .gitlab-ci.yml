@@ -398,27 +398,14 @@ fill-template:
         -o -name "*.toml" -o -name "*.txt" -o -name "*.md" \) \
         -exec sed -i "s/{{PROJECT_NAME}}/${PROJECT_NAME}/g" {} +
 
+      # Контент готовим ЛОКАЛЬНО (без пуша): ветка + шаблон + коммит.
       cd new-project
       git add -A
       git commit -m "feat: init from ${TEMPLATE_TYPE} template (branch ${TARGET_BRANCH})"
 
-      # Две последовательные свободные версии 1.0.X (теги репо-глобальные).
-      # 1.0.X — просто удобная монотонная схема (фильтра по major в ядре нет).
-      # `|| true`: на свежем репо grep не находит тегов и под pipefail валит джобу.
-      LAST=$(git ls-remote --tags origin '1.0.*' 2>/dev/null \
-        | sed 's#.*refs/tags/1\.0\.##; s/\^{}//' | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
-      LAST=${LAST:--1}
-      SETUP_TAG="1.0.$((LAST+1))"
-      TRIGGER_TAG="1.0.$((LAST+2))"
-
-      # 1) SETUP-пуш: ветка + контент шаблона + первый тег. Заводит репозиторий/ветку
-      #    и первую версию. Деплой тут может НЕ сработать — Jenkins-сид ещё не создал
-      #    деплой-джобу из обновлённого job-dsl (продукт только мёржится).
-      git tag "${SETUP_TAG}"
-      git push origin "${TARGET_BRANCH}" "${SETUP_TAG}"
-      echo "setup pushed: ${TARGET_BRANCH} + ${SETUP_TAG}"
-
-      # 2) Ждём появления продукта в job-dsl master (MR из register-in-dsl ~2 мин).
+      # 1) Ждём появления продукта в job-dsl master (MR из register-in-dsl ~2 мин).
+      #    Пуш ветки делаем ПОЗЖЕ — чтобы единственный push пришёл уже после того,
+      #    как Jenkins-сид создал деплой-джобу (иначе хук уходит впустую).
       PRODUCT_DSL="${PRODUCT_NAME:-$TARGET_GROUP_NAME}"
       DSL_GIT="https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/libs/cicd/nmf/nmf-job-dsl.git"
       DSL_REL="middle/itbigdata/${PRODUCT_DSL}.yaml"
@@ -438,19 +425,23 @@ fill-template:
       rm -rf /tmp/dsl-poll
       [ "$i" -le 60 ] && echo "OK: продукт в job-dsl master"
 
-      # 3) Буфер: после изменения job-dsl Jenkins-сид создаёт деплой-джобу не мгновенно.
+      # 2) Буфер: после изменения job-dsl Jenkins-сид создаёт деплой-джобу не мгновенно.
       echo "Ждём ~90с создания деплой-джобы Jenkins-сидом..."
       sleep 90
 
-      # 4) TRIGGER-пуш: эмулируем ручное «новый коммит + новый тег в develop» — теперь
-      #    деплой-джоба уже существует и хук гарантированно её триггерит (branch-UPDATE
-      #    с реальным commit_previous_id и новым тегом). Меняем VERSION для непустого диффа.
-      printf '%s\n' "${TRIGGER_TAG}" > VERSION
-      git add VERSION
-      git commit -m "chore: trigger deploy ${TRIGGER_TAG}"
-      git tag "${TRIGGER_TAG}"
-      git push origin "${TARGET_BRANCH}" "${TRIGGER_TAG}"
-      echo "trigger pushed (branch-update + ${TRIGGER_TAG}) — деплой должен стартовать"
+      # 3) Первая свободная версия 1.0.X (теги репо-глобальные). На свежем репо → 1.0.0.
+      #    1.0.X — удобная монотонная схема (фильтра по major в ядре нет).
+      #    `|| true`: на свежем репо grep не находит тегов и под pipefail валит джобу.
+      LAST=$(git ls-remote --tags origin '1.0.*' 2>/dev/null \
+        | sed 's#.*refs/tags/1\.0\.##; s/\^{}//' | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
+      LAST=${LAST:--1}
+      TAG="1.0.$((LAST+1))"
+
+      # 4) Создаём тег, затем ОДИН отложенный push (ветка + тег) — деплой-джоба уже
+      #    существует, хук гарантированно её триггерит. Один тег на прогон.
+      git tag "${TAG}"
+      git push origin "${TARGET_BRANCH}" "${TAG}"
+      echo "pushed: ${TARGET_BRANCH} + ${TAG} — деплой должен стартовать"
 
 
 fill-config:
