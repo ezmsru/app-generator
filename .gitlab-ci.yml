@@ -358,7 +358,7 @@ fill-template:
     - if: $ACTION == "create"
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
-    - apk add --no-cache git
+    - apk add --no-cache git curl
     - git config --global user.email "cicd-generator@megafon.ru"
     - git config --global user.name "CICD Generator"
   script:
@@ -425,9 +425,33 @@ fill-template:
       rm -rf /tmp/dsl-poll
       [ "$i" -le 60 ] && echo "OK: продукт в job-dsl master"
 
-      # 2) Буфер: после изменения job-dsl Jenkins-сид создаёт деплой-джобу не мгновенно.
-      echo "Ждём ~90с создания деплой-джобы Jenkins-сидом..."
-      sleep 90
+      # 2) Активно ждём, пока Jenkins-сид создаст деплой-джобу нашего сервиса.
+      #    Папка ИС может уже существовать от других сервисов — поэтому проверяем
+      #    появление джобы именно "${PROJECT_NAME}" внутри неё, а не саму папку.
+      #    Авторизация ТУЗа — basic auth (JENKINS_USER + JENKINS_TOKEN, masked CI-vars).
+      #    Если переменные не заданы — откатываемся на фиксированный буфер.
+      JENKINS_FOLDER="https://jenkins.middle.megafon.ru/job/middle/job/itbigdata/${TARGET_GROUP_NAME}"
+      if [ -n "${JENKINS_USER}" ] && [ -n "${JENKINS_TOKEN}" ]; then
+        echo "Ждём создания деплой-джобы ${PROJECT_NAME} в Jenkins (${JENKINS_FOLDER})..."
+        j=0
+        until curl -sf -u "${JENKINS_USER}:${JENKINS_TOKEN}" \
+                "${JENKINS_FOLDER}/api/json?tree=jobs[name]" 2>/dev/null \
+                | grep -q "\"name\":\"${PROJECT_NAME}\""; do
+          j=$((j+1))
+          if [ "$j" -gt 60 ]; then
+            echo "WARN: джоба ${PROJECT_NAME} не появилась в Jenkins за ~5 мин — продолжаем"
+            break
+          fi
+          echo "  джобы ещё нет, ждём... (попытка $j)"
+          sleep 5
+        done
+        [ "$j" -le 60 ] && echo "OK: деплой-джоба ${PROJECT_NAME} создана в Jenkins"
+        # Небольшая страховка: даём сиду дорегистрировать триггеры джобы.
+        sleep 10
+      else
+        echo "JENKINS_USER/JENKINS_TOKEN не заданы — фиксированный буфер 90с"
+        sleep 90
+      fi
 
       # 3) Первая свободная версия 1.0.X (теги репо-глобальные). На свежем репо → 1.0.0.
       #    1.0.X — удобная монотонная схема (фильтра по major в ядре нет).
