@@ -438,9 +438,11 @@ fill-template:
         JAPI="${JENKINS_FOLDER}/api/json?tree=jobs[name]"
         j=0
         while :; do
+          # -g: ОБЯЗАТЕЛЬНО — иначе curl трактует [name] в tree=jobs[name] как
+          #     glob-диапазон и молча ломает запрос (пустой ответ, вечный цикл).
           # -L: следуем редиректам; код и тело разбираем отдельно, чтобы видеть,
-          # 200 это / 401 / 403 / редирект, а не молча падать как раньше (-sf).
-          RESP=$(curl -sS -L -w '\n%{http_code}' \
+          #     200 это / 401 / 403 / редирект, а не молча падать как раньше (-sf).
+          RESP=$(curl -sS -g -L -w '\n%{http_code}' \
             -u "${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}" "${JAPI}" 2>/dev/null || true)
           CODE=$(printf '%s' "${RESP}" | tail -n1)
           BODY=$(printf '%s' "${RESP}" | sed '$d')
