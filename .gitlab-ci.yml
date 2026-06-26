@@ -569,6 +569,7 @@ fill-config:
       esc() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
       find new-project/helm/ new-project/Dockerfile -type f -exec sed -i \
         -e "s|{{PROJECT_NAME}}|$(esc "$PROJECT_NAME")|g" \
+        -e "s|{{TARGET_GROUP_NAME}}|$(esc "$TARGET_GROUP_NAME")|g" \
         -e "s|{{SERVICE_PORT}}|$(esc "$SERVICE_PORT")|g" \
         -e "s|{{PG_ENABLED}}|$(esc "$PG_ENABLED")|g" \
         -e "s|{{PG_HOST}}|$(esc "$PG_HOST")|g" \

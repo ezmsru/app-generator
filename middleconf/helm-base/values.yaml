@@ -1,5 +1,5 @@
 global:
-  namespace: "{{PROJECT_NAME}}"
+  namespace: "{{TARGET_GROUP_NAME}}"
 
 generic:
   deployTimeout: "1m"
@@ -9,7 +9,7 @@ generic:
   imagePullSecrets:
     - name: mf-artifactory-registry
   namespaceLabels:
-    "megafon.ru/informationSystem": "{{PROJECT_NAME}}"
+    "megafon.ru/informationSystem": "{{TARGET_GROUP_NAME}}"
     "team": "itbigdata"
 
 pdb:
