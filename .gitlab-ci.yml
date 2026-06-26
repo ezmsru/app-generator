@@ -390,9 +390,10 @@ fill-template:
       git commit -m "feat: init from ${TEMPLATE_TYPE} template (branch ${TARGET_BRANCH})"
 
       # Две последовательные свободные версии 1.0.X (теги репо-глобальные).
-      # MAJOR>=1: деплой/сборка пропускает 0.0.x как не-релизные.
+      # 1.0.X — просто удобная монотонная схема (фильтра по major в ядре нет).
+      # `|| true`: на свежем репо grep не находит тегов и под pipefail валит джобу.
       LAST=$(git ls-remote --tags origin '1.0.*' 2>/dev/null \
-        | sed 's#.*refs/tags/1\.0\.##; s/\^{}//' | grep -E '^[0-9]+$' | sort -n | tail -1)
+        | sed 's#.*refs/tags/1\.0\.##; s/\^{}//' | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
       LAST=${LAST:--1}
       SETUP_TAG="1.0.$((LAST+1))"
       TRIGGER_TAG="1.0.$((LAST+2))"
