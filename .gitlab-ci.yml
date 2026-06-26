@@ -731,6 +731,9 @@ setup-webhook:
 register-in-dsl:
   stage: register-dsl
   image: $CI_IMAGE
+  # Общий слот на запись в nmf-job-dsl: create/delete от РАЗНЫХ пайплайнов идут
+  # строго по одному → нет параллельных правок файла продукта и конфликтов мёржа.
+  resource_group: "nmf-job-dsl"
   needs:
     - job: create-repo
       artifacts: true
@@ -822,6 +825,26 @@ register-in-dsl:
         -o merge_request.title="feat: register ${PROJECT_NAME} in job-dsl" \
         origin "${FEATURE_BRANCH}"
 
+      # Держим resource_group-слот, ПОКА MR не приземлится в master (продукт
+      # появился). Иначе следующая job ответвится от master без нашей правки →
+      # конфликт. Пуллим master до появления "${PROJECT_NAME}".
+      DSL_URL="https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/${DSL_REPO_PATH}.git"
+      echo "Ждём слияния MR — появления ${PROJECT_NAME} в ${DSL_TARGET_BRANCH}..."
+      i=0
+      until rm -rf /tmp/dsl-verify && \
+            git clone -q --depth 1 --branch "${DSL_TARGET_BRANCH}" "${DSL_URL}" /tmp/dsl-verify 2>/dev/null && \
+            grep -q "\"${PROJECT_NAME}\"" "/tmp/dsl-verify/${DSL_FILE}" 2>/dev/null; do
+        i=$((i+1))
+        if [ "$i" -gt 60 ]; then
+          echo "WARN: ${PROJECT_NAME} не появился в ${DSL_TARGET_BRANCH} за ~5 мин — продолжаем"
+          break
+        fi
+        echo "  ещё не слит, ждём... (попытка $i)"
+        sleep 5
+      done
+      rm -rf /tmp/dsl-verify
+      [ "$i" -le 60 ] && echo "OK: ${PROJECT_NAME} в ${DSL_TARGET_BRANCH}"
+
 
 # ============================================================================
 # РЕЖИМ УДАЛЕНИЯ (action=delete)
@@ -835,6 +858,9 @@ register-in-dsl:
 delete-repository:
   stage: delete
   image: $CI_IMAGE
+  # Тот же слот, что и у register-in-dsl: запись в nmf-job-dsl (create + delete)
+  # сериализуется глобально → параллельное удаление/создание не конфликтует.
+  resource_group: "nmf-job-dsl"
   rules:
     - if: $ACTION == "delete"
   variables:
@@ -990,3 +1016,24 @@ delete-repository:
         -o merge_request.target="${DSL_TARGET_BRANCH}" \
         -o merge_request.title="chore: remove ${PROJECT_NAME} from job-dsl" \
         origin "${FEATURE_BRANCH}"
+
+      # Держим resource_group-слот, ПОКА MR не приземлится в master (продукт
+      # реально удалён). Без этого параллельное удаление ловит конфликт мёржа:
+      # следующая job ответвляется от master, куда наша правка ещё не доехала.
+      # Пуллим master, пока "${PROJECT_NAME}" не исчезнет.
+      DSL_URL="https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/${DSL_REPO_PATH}.git"
+      echo "Ждём слияния MR — удаления ${PROJECT_NAME} из ${DSL_TARGET_BRANCH}..."
+      i=0
+      while rm -rf /tmp/dsl-verify && \
+            git clone -q --depth 1 --branch "${DSL_TARGET_BRANCH}" "${DSL_URL}" /tmp/dsl-verify 2>/dev/null && \
+            grep -q "\"${PROJECT_NAME}\"" "/tmp/dsl-verify/${DSL_FILE}" 2>/dev/null; do
+        i=$((i+1))
+        if [ "$i" -gt 60 ]; then
+          echo "WARN: ${PROJECT_NAME} всё ещё в ${DSL_TARGET_BRANCH} спустя ~5 мин — проверьте MR"
+          break
+        fi
+        echo "  ещё не удалён, ждём... (попытка $i)"
+        sleep 5
+      done
+      rm -rf /tmp/dsl-verify
+      [ "$i" -le 60 ] && echo "OK: ${PROJECT_NAME} удалён из ${DSL_TARGET_BRANCH}"
