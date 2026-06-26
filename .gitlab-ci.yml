@@ -451,9 +451,6 @@ fill-template:
             break
           fi
           j=$((j+1))
-          if [ "${j}" = 1 ]; then
-            echo "  диагностика: HTTP=${CODE}; первые 200 симв.: $(printf '%s' "${BODY}" | tr '\n' ' ' | head -c 200)"
-          fi
           if [ "${j}" -gt 60 ]; then
             echo "WARN: джоба ${PROJECT_NAME} не появилась за ~5 мин (последний HTTP=${CODE}) — продолжаем"
             break
