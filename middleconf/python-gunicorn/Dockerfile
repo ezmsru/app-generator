@@ -44,6 +44,9 @@ COPY ${WORKSPACE}/cicd-conf/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod a+x /usr/local/bin/entrypoint.sh && chown -R 11200 /data/app
 USER 11200
 
+# gunicorn.conf.py читает порт из env PORT — задаём его здесь (плейсхолдер
+# подставляется fill-config в middleconf; в app-репо он бы остался буквальным).
+ENV PORT={{SERVICE_PORT}}
 EXPOSE {{SERVICE_PORT}}
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["gunicorn", "-c", "gunicorn.conf.py", "main:app"]
