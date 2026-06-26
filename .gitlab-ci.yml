@@ -277,6 +277,15 @@ create-repo:
     - apk add --no-cache curl jq
   script:
     - |
+      GREEN=$(printf '\033[32m'); BOLD=$(printf '\033[1m'); RESET=$(printf '\033[0m')
+
+      # Человеческое имя проекта: slug → Title Case с пробелами.
+      # path (slug в URL) остаётся = PROJECT_NAME, а name отображается красиво.
+      # coach-bot-orchestrator-runner → Coach Bot Orchestrator Runner
+      DISPLAY_NAME=$(printf '%s' "${PROJECT_NAME}" | tr '_.-' '   ' \
+        | awk '{for(i=1;i<=NF;i++){$i=toupper(substr($i,1,1)) substr($i,2)}; print}')
+      echo "Имя проекта (GitLab): ${DISPLAY_NAME}  |  slug: ${PROJECT_NAME}"
+
       # get-or-create: если проект уже есть (redeploy) — переиспользуем, не создаём дубль
       create_project() {
         local NS_ID="$1"; local DESC="$2"; local TOKEN="$3"; local GROUP_PATH="$4"
@@ -291,7 +300,8 @@ create-repo:
           --header "PRIVATE-TOKEN: ${TOKEN}" \
           --header "Content-Type: application/json" \
           --data "{
-            \"name\": \"${PROJECT_NAME}\",
+            \"name\": \"${DISPLAY_NAME}\",
+            \"path\": \"${PROJECT_NAME}\",
             \"namespace_id\": ${NS_ID},
             \"description\": \"${DESC}\",
             \"visibility\": \"internal\",
@@ -315,8 +325,11 @@ create-repo:
         echo "ERROR создания middleconf:"; echo "$R2" | jq .; exit 1
       fi
 
-      echo "middle     : ID=${MIDDLE_PROJECT_ID} URL=${MIDDLE_PROJECT_WEB}"
-      echo "middleconf : ID=${MIDDLECONF_PROJECT_ID} URL=${MIDDLECONF_PROJECT_WEB}"
+      echo "${GREEN}${BOLD}========================================${RESET}"
+      echo "${GREEN}${BOLD}  РЕПОЗИТОРИИ СОЗДАНЫ${RESET}"
+      echo "${GREEN}  middle     : ID=${MIDDLE_PROJECT_ID} URL=${MIDDLE_PROJECT_WEB}${RESET}"
+      echo "${GREEN}  middleconf : ID=${MIDDLECONF_PROJECT_ID} URL=${MIDDLECONF_PROJECT_WEB}${RESET}"
+      echo "${GREEN}${BOLD}========================================${RESET}"
 
       {
         echo "MIDDLE_PROJECT_ID=${MIDDLE_PROJECT_ID}"
@@ -785,14 +798,16 @@ delete-repository:
 
       PRODUCT="${PRODUCT_NAME:-$TARGET_GROUP_NAME}"
 
+      RED=$(printf '\033[31m'); BOLD=$(printf '\033[1m'); RESET=$(printf '\033[0m')
+
       # --- Баннер: что именно будет удалено ---
-      echo "========================================"
-      echo "  РЕЖИМ УДАЛЕНИЯ"
-      echo "  middle    : middle/itbigdata/${TARGET_GROUP_NAME}/${PROJECT_NAME}"
-      echo "  middleconf: middleconf/itbigdata/${TARGET_GROUP_NAME}/${PROJECT_NAME}"
-      echo "  job-dsl   : middle/itbigdata/${PRODUCT}.yaml → продукт \"${PROJECT_NAME}\""
-      echo "  (группа ${TARGET_GROUP_NAME} НЕ удаляется)"
-      echo "========================================"
+      echo "${RED}${BOLD}========================================${RESET}"
+      echo "${RED}${BOLD}  РЕЖИМ УДАЛЕНИЯ${RESET}"
+      echo "${RED}  middle    : middle/itbigdata/${TARGET_GROUP_NAME}/${PROJECT_NAME}${RESET}"
+      echo "${RED}  middleconf: middleconf/itbigdata/${TARGET_GROUP_NAME}/${PROJECT_NAME}${RESET}"
+      echo "${RED}  job-dsl   : middle/itbigdata/${PRODUCT}.yaml → продукт \"${PROJECT_NAME}\"${RESET}"
+      echo "${RED}  (группа ${TARGET_GROUP_NAME} НЕ удаляется)${RESET}"
+      echo "${RED}${BOLD}========================================${RESET}"
 
       # --- Удаление проектов middle + middleconf ---
       # middle и middleconf — независимые root-группы с разными ТУЗами.
