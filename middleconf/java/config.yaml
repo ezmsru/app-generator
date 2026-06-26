@@ -1,0 +1,7 @@
+configuration:
+  sources:
+    # language задаёт buildpack/build_image ядра (java → docker-java11maven-alpine, JDK 11).
+    # srcDirectory по умолчанию app — туда buildApp кладёт собранный jar.
+    language: "java"
+  exclude:
+    - "staticAnalyzer"

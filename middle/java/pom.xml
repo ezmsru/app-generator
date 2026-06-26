@@ -4,16 +4,22 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <!-- Spring Boot 2.7.x — последняя ветка с поддержкой Java 11
+         (build_image MfactoryCI для java — docker-java11maven-alpine, JDK 11). -->
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.3.0</version>
+        <version>2.7.18</version>
     </parent>
 
     <groupId>com.template</groupId>
     <artifactId>{{PROJECT_NAME}}</artifactId>
     <version>1.0.0</version>
     <name>{{PROJECT_NAME}}</name>
+
+    <properties>
+        <java.version>11</java.version>
+    </properties>
 
     <dependencies>
         <dependency>

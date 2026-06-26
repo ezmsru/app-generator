@@ -1,0 +1,7 @@
+configuration:
+  sources:
+    # language js — build_image ядра с node (npm доступен на стадии buildApp).
+    # srcDirectory по умолчанию app — туда buildApp кладёт src + node_modules + package.json.
+    language: "js"
+  exclude:
+    - "staticAnalyzer"
