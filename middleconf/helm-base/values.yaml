@@ -77,3 +77,14 @@ deployment:
       initialDelaySeconds: 10
       failureThreshold: 3
       periodSeconds: 5
+    # readOnlyRootFilesystem=true → корень только для чтения. Приложениям, которые
+    # пишут во временную папку (Tomcat/Spring → /tmp/tomcat.*, и т.п.), монтируем
+    # writable tmpfs на /tmp (по доке MfactoryCI). Память tmpfs учитывается в лимите.
+    volumeMounts:
+      - mountPath: /tmp
+        name: tmpfs
+  volumes:
+    - name: tmpfs
+      emptyDir:
+        medium: Memory
+        sizeLimit: "64Mi"
