@@ -7,13 +7,12 @@ WORKDIR /data/app
 
 # srcDirectory app наполняется make-таргетом buildApp: src/ + node_modules/ + package.json.
 COPY ./app /data/app
-COPY ${WORKSPACE}/cicd-conf/entrypoint.sh /usr/local/bin/entrypoint.sh
 
-RUN chmod a+x /usr/local/bin/entrypoint.sh && chown -R 11200 /data/app
+RUN chown -R 11200 /data/app
 USER 11200
 
 # PORT читает приложение (src/config.js); /eapi/<app>-префикс роутов — в src/index.js.
 ENV PORT={{SERVICE_PORT}}
 EXPOSE {{SERVICE_PORT}}
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["node", "src/index.js"]
+# Прямой exec-вход (node = PID 1) — без промежуточной оболочки.
+ENTRYPOINT ["node", "src/index.js"]

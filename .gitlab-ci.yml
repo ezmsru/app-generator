@@ -577,13 +577,18 @@ fill-config:
       # Dockerfile
       cp "middleconf/${TEMPLATE_TYPE}/Dockerfile" new-project/Dockerfile
 
-      # Python-специфичные общие файлы (entrypoint, config, Makefile)
+      # Файлы сборки MfactoryCI (config.yaml + Makefile) — обязательны для buildpack.
+      # python: общие из common-python (+ entrypoint.sh); java/node: свои из middleconf/<type>.
       case "${TEMPLATE_TYPE}" in
         python-*)
           cp middleconf/common-python/entrypoint.sh new-project/entrypoint.sh
           cp middleconf/common-python/config.yaml   new-project/config.yaml
           cp middleconf/common-python/Makefile      new-project/Makefile
           chmod +x new-project/entrypoint.sh
+          ;;
+        java|node)
+          cp "middleconf/${TEMPLATE_TYPE}/config.yaml" new-project/config.yaml
+          cp "middleconf/${TEMPLATE_TYPE}/Makefile"    new-project/Makefile
           ;;
       esac
 

@@ -7,13 +7,13 @@ WORKDIR /data/app
 
 # srcDirectory app наполняется make-таргетом buildApp: там лежит app.jar.
 COPY ./app/*.jar /data/app/app.jar
-COPY ${WORKSPACE}/cicd-conf/entrypoint.sh /usr/local/bin/entrypoint.sh
 
-RUN chmod a+x /usr/local/bin/entrypoint.sh && chown -R 11200 /data/app
+RUN chown -R 11200 /data/app
 USER 11200
 
 EXPOSE {{SERVICE_PORT}}
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-# Порт и префикс /eapi/<app> приходят из подставляемых плейсхолдеров (middleconf).
+# Прямой exec-вход (java = PID 1, корректная обработка SIGTERM) — best practice доки.
+# Порт и префикс /eapi/<app> — из подставляемых плейсхолдеров (middleconf):
 # server.servlet.context-path сдвигает все роуты (вкл. /manage/health) под /eapi/<app>.
-CMD ["java", "-jar", "/data/app/app.jar", "--server.port={{SERVICE_PORT}}", "--server.servlet.context-path=/eapi/{{PROJECT_NAME}}"]
+ENTRYPOINT ["java", "-jar", "/data/app/app.jar"]
+CMD ["--server.port={{SERVICE_PORT}}", "--server.servlet.context-path=/eapi/{{PROJECT_NAME}}"]
