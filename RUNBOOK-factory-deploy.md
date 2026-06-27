@@ -25,11 +25,8 @@
 
 ---
 
-> ⚠️ **ПЕРЕД ПУБЛИКАЦИЕЙ В CONFLUENCE — заполнить плейсхолдеры** (помечены `<…>`):
-> - `<кто-заводит-PAM>` / `<кто-заводит-namespace-квоту>` — ответственный (DevOps/владелец ИС).
-> Остальное (стенды, ресурсы, PAM-пути, IS-коды, контакты DevOps, ссылка на генератор) — фактическое, ниже.
->
-> **Контакт DevOps:** email `it-reporting-deployment-devops@megafon.ru`; заявки в Jira — [DATA](https://jira.megafon.ru/browse/DATA).
+> ℹ️ **Контакт DevOps** — по доступам GitLab, namespace-квотам, PAM-секретам и CI-переменным:
+> email `it-reporting-deployment-devops@megafon.ru`; заявки в Jira — [DATA](https://jira.megafon.ru/browse/DATA).
 
 ---
 
@@ -50,8 +47,8 @@
 |---|---|---|
 | Доступ GitLab: **Developer** в группах `middle/itbigdata` и `middleconf/itbigdata` | DevOps (`it-reporting-deployment-devops@megafon.ru`, заявки в Jira [DATA](https://jira.megafon.ru/browse/DATA)) | Нужен, чтобы клонировать/пушить. Для **удаления** репозитория нужен **Owner**. |
 | **ИС (продукт) существует** — `target_group_name` | владелец ИС | Например `cost_scan`, `llm-botforge`. Генератор создаст GitLab-подгруппу, если её нет, но сама ИС (квота namespace, label в cmdb) должна быть зарегистрирована заранее. |
-| **Namespace-квота** в Rancher на ИС | `<кто-заводит-namespace-квоту>` | helm создаёт namespace при первом деплое, но **ресурсная квота** на ИС выделяется отдельно (dev/preprod: 250m/256mb на продукт). |
-| **PAM-секреты** (если включаешь PG/Redis/S3) | `<кто-заводит-PAM>` | Должны лежать в SingleConnect по пути `/MegaFon/Common/Data-Analytics/<stand>/<pam_source>/`. Если интеграция включена, а секрета нет — ESO не создаст k8s Secret и **под не стартует**. |
+| **Namespace-квота** в Rancher на ИС | DevOps (`it-reporting-deployment-devops@megafon.ru`, Jira [DATA](https://jira.megafon.ru/browse/DATA)) | helm создаёт namespace при первом деплое, но **ресурсная квота** на ИС выделяется отдельно (dev/preprod: 250m/256mb на продукт). |
+| **PAM-секреты** (если включаешь PG/Redis/S3) | DevOps (`it-reporting-deployment-devops@megafon.ru`, Jira [DATA](https://jira.megafon.ru/browse/DATA)) | Должны лежать в SingleConnect по пути `/MegaFon/Common/Data-Analytics/<stand>/<pam_source>/`. Если интеграция включена, а секрета нет — ESO не создаст k8s Secret и **под не стартует**. |
 | **CI-переменные** генератора (токены ТУЗа, `DELETE_PASSWORD` и т.п.) | DevOps (разово) | Разработчику трогать НЕ нужно — заданы на уровне проекта генератора. |
 | **label `megafon.ru/informationSystem`** валиден в ФНС/cmdb | владелец ИС | Иначе деплой упадёт на kyverno-политике (см. Troubleshooting). Значение = англ. название ИС из `cmdb.megafon.ru`. |
 
