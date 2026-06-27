@@ -26,10 +26,10 @@
 ---
 
 > ⚠️ **ПЕРЕД ПУБЛИКАЦИЕЙ В CONFLUENCE — заполнить плейсхолдеры** (помечены `<…>`):
-> - `<URL-проекта-генератора>` — GitLab-проект, где у разработчика кнопка **CI/CD → Run pipeline**.
 > - `<кто-заводит-PAM>` / `<кто-заводит-namespace-квоту>` — ответственный (DevOps/владелец ИС).
-> - `<DEVOPS-контакт>` — телеграм-чат/ответственный по доступам и CI-переменным.
-> Остальное (стенды, ресурсы, PAM-пути, IS-коды) — фактическое, ниже в приложениях.
+> Остальное (стенды, ресурсы, PAM-пути, IS-коды, контакты DevOps, ссылка на генератор) — фактическое, ниже.
+>
+> **Контакт DevOps:** email `it-reporting-deployment-devops@megafon.ru`; заявки в Jira — [DATA](https://jira.megafon.ru/browse/DATA).
 
 ---
 
@@ -48,20 +48,20 @@
 
 | Предпосылка | Кто обеспечивает | Комментарий |
 |---|---|---|
-| Доступ GitLab: **Developer** в группах `middle/itbigdata` и `middleconf/itbigdata` | `<DEVOPS-контакт>` | Нужен, чтобы клонировать/пушить. Для **удаления** репозитория нужен **Owner**. |
+| Доступ GitLab: **Developer** в группах `middle/itbigdata` и `middleconf/itbigdata` | DevOps (`it-reporting-deployment-devops@megafon.ru`, заявки в Jira [DATA](https://jira.megafon.ru/browse/DATA)) | Нужен, чтобы клонировать/пушить. Для **удаления** репозитория нужен **Owner**. |
 | **ИС (продукт) существует** — `target_group_name` | владелец ИС | Например `cost_scan`, `llm-botforge`. Генератор создаст GitLab-подгруппу, если её нет, но сама ИС (квота namespace, label в cmdb) должна быть зарегистрирована заранее. |
 | **Namespace-квота** в Rancher на ИС | `<кто-заводит-namespace-квоту>` | helm создаёт namespace при первом деплое, но **ресурсная квота** на ИС выделяется отдельно (dev/preprod: 250m/256mb на продукт). |
 | **PAM-секреты** (если включаешь PG/Redis/S3) | `<кто-заводит-PAM>` | Должны лежать в SingleConnect по пути `/MegaFon/Common/Data-Analytics/<stand>/<pam_source>/`. Если интеграция включена, а секрета нет — ESO не создаст k8s Secret и **под не стартует**. |
 | **CI-переменные** генератора (токены ТУЗа, `DELETE_PASSWORD` и т.п.) | DevOps (разово) | Разработчику трогать НЕ нужно — заданы на уровне проекта генератора. |
 | **label `megafon.ru/informationSystem`** валиден в ФНС/cmdb | владелец ИС | Иначе деплой упадёт на kyverno-политике (см. Troubleshooting). Значение = англ. название ИС из `cmdb.megafon.ru`. |
 
-> ℹ️ Этот runbook — про **добавление компонента в существующую ИС**. Подъём НОВОЙ ИС с нуля (регистрация в cmdb, выделение namespace-квоты, заведение PAM) выходит за рамки генератора — оформляется отдельно через `<DEVOPS-контакт>`.
+> ℹ️ Этот runbook — про **добавление компонента в существующую ИС**. Подъём НОВОЙ ИС с нуля (регистрация в cmdb, выделение namespace-квоты, заведение PAM) выходит за рамки генератора — оформляется отдельно через DevOps (`it-reporting-deployment-devops@megafon.ru`, заявки в Jira [DATA](https://jira.megafon.ru/browse/DATA)).
 
 ---
 
 ## 2. Шаг 1 — Запустить джобу-генератор
 
-**Где:** `<URL-проекта-генератора>` → **CI/CD → Pipelines → Run pipeline** → выбрать ветку → заполнить форму инпутов → **Run pipeline**.
+**Где:** проект генератора [**Generator App**](https://cicd-git.megafon.ru/middle/itbigdata/devops_tools/generator-app) → в левом меню **CI/CD → Pipelines** → кнопка **▶ Запустить pipeline** (Run pipeline) → выбрать ветку → заполнить форму инпутов → нажать **▶ Запустить pipeline**.
 
 ### Поля формы (Run pipeline)
 
@@ -256,7 +256,7 @@ GitLab pipeline  ──(клик по упавшей стадии)──►  Jen
    ЧТО упало                                       ПОЧЕМУ упала сборка/деплой              ПОЧЕМУ не стартует контейнер в k8s
 ```
 
-> 🔐 **Авторизация и в Jenkins, и в Rancher — по короткой корпоративной УЗ** (логин вида `ivanov_ii`, доменный пароль). Если доступа нет — запросить у `<DEVOPS-контакт>`.
+> 🔐 **Авторизация и в Jenkins, и в Rancher — по короткой корпоративной УЗ** (логин вида `ivanov_ii`, доменный пароль). Если доступа нет — запросить у DevOps (`it-reporting-deployment-devops@megafon.ru`, заявки в Jira [DATA](https://jira.megafon.ru/browse/DATA)).
 
 #### Слой 1. GitLab — пайплайн приложения (НЕ генератора)
 
