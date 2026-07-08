@@ -232,10 +232,13 @@ validate-params:
             exit 1
           fi
 
+          # visibility=private: подгруппа НЕ может быть публичнее private-родителя
+          # (itbigdata — private), плюс уровень internal ограничен админом GitLab.
+          # private допустим всегда (равно или строже родителя).
           CREATE=$(curl -s --request POST \
             --header "PRIVATE-TOKEN: ${TOKEN}" \
             --header "Content-Type: application/json" \
-            --data "{\"name\": \"${TARGET_GROUP_NAME}\", \"path\": \"${TARGET_GROUP_NAME}\", \"parent_id\": ${PARENT_ID}, \"visibility\": \"internal\"}" \
+            --data "{\"name\": \"${TARGET_GROUP_NAME}\", \"path\": \"${TARGET_GROUP_NAME}\", \"parent_id\": ${PARENT_ID}, \"visibility\": \"private\"}" \
             "${GITLAB_URL}/api/v4/groups")
           GROUP_ID=$(echo "$CREATE" | jq -r '.id // empty')
           if [ -z "$GROUP_ID" ]; then
@@ -304,7 +307,7 @@ create-repo:
             \"path\": \"${PROJECT_NAME}\",
             \"namespace_id\": ${NS_ID},
             \"description\": \"${DESC}\",
-            \"visibility\": \"internal\",
+            \"visibility\": \"private\",
             \"initialize_with_readme\": true,
             \"default_branch\": \"master\"
           }" \
