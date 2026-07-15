@@ -1484,24 +1484,20 @@ redis-user-delete:
               raise SystemExit(f"ERROR delete {key} @ {scope}: HTTP {st} {body[:200]}")
       PYEOF
 
-      # --- 2) genai-users.yml: удалить ACL-блок пользователя, ветка + MR ---
-      FEATURE_BRANCH="feature/remove-${PROJECT_NAME}"
-      git clone "https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/${REDIS_REPO_PATH}.git" redis-repo
-      cd redis-repo
-      DEFAULT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "${REDIS_FALLBACK_BRANCH}")
-      git checkout "${FEATURE_BRANCH}" 2>/dev/null || git checkout -b "${FEATURE_BRANCH}"
-
+      # --- 2) genai-users.yml: удалить ACL-блок пользователя ВЕЗДЕ, где он есть ---
+      # Запись могла остаться либо в master (create-MR влит), либо только в create-
+      # ветке feature/<product> (MR НЕ влит, но деплой с неё уже прожат → в живом
+      # redis юзер есть). Чистим оба места и оставшуюся create-ветку удаляем.
       export GEN_USER_VAR="${USER_VAR}" GEN_USERS_FILE="${REDIS_USERS_FILE}"
+
+      # helper: вырезать ACL-блок пользователя в текущем genai-users.yml (чистый текст)
+      redis_remove_entry() {
       python3 - <<'PYEOF'
       import os, re
       from pathlib import Path
-
       user_var = os.environ['GEN_USER_VAR']
       path = Path(os.environ['GEN_USERS_FILE'])
       needle = f"${{{user_var}}}"
-
-      # Вырезаем блок как ЧИСТЫЙ ТЕКСТ (без ruamel round-trip): удаляем только
-      # элемент списка, чьё тело содержит ${<USER_VAR>}; остальные блоки не трогаем.
       text = path.read_text()
       lines = text.split("\n")
       m = re.search(r'^(\s*)-\s*\|', text, re.M)   # отступ элементов по первому '- |'
@@ -1522,34 +1518,18 @@ redis-user-delete:
               i = j
           else:
               out.append(lines[i]); i += 1
-      if removed == 0:
-          print(f"{user_var} не найден в genai-users.yml — правку не вносим")
-      else:
+      if removed:
           res = "\n".join(out)
           if res and not res.endswith("\n"):
               res += "\n"
           path.write_text(res)
-          print(f"{user_var} удалён из genai-users.yml (блоков убрано: {removed})")
+      print(f"removed={removed}")
       PYEOF
+      }
 
-      git add "${REDIS_USERS_FILE}"
-      if git diff --cached --quiet; then
-        echo "Нет изменений в ${REDIS_USERS_FILE} — MR не требуется (учётки уже нет)"
-        exit 0
-      fi
-
-      MR_DESC="Удаление Redis-учётки при удалении продукта ${PROJECT_NAME} (группа ${TARGET_GROUP_NAME}). Убран пользователь ${USER_VAR} из genai-users.yml; CI/CD-переменные ${USER_VAR}/${PASS_VAR} удалены во всех окружениях. После слияния deploy_standalone перегенерирует users.acl без этого пользователя."
-      git commit -m "chore: remove redis genai-user ${PROJECT_NAME}"
-      git push \
-        -o merge_request.create \
-        -o merge_request.target="${DEFAULT_BRANCH}" \
-        -o merge_request.title="chore: remove redis genai-user ${PROJECT_NAME}" \
-        -o merge_request.description="${MR_DESC}" \
-        origin "${FEATURE_BRANCH}"
-      echo "OK: ветка ${FEATURE_BRANCH} запушена, MR в ${DEFAULT_BRANCH} открыт"
-
-      # --- 3) Авто-прожатие deploy_standalone (регенерация users.acl без юзера) ---
-      export GEN_TOKEN="${GITLAB_TUZ_TOKEN}" GEN_API="${API}" GEN_REF="${FEATURE_BRANCH}"
+      # helper: дождаться пайплайна ветки $1 и прожать deploy_standalone до терминала
+      redis_play_deploy() {
+      export GEN_TOKEN="${GITLAB_TUZ_TOKEN}" GEN_API="${API}" GEN_REF="$1"
       python3 - <<'PYEOF'
       import os, json, time, urllib.request, urllib.parse, urllib.error
       TOKEN = os.environ['GEN_TOKEN']; API = os.environ['GEN_API']; REF = os.environ['GEN_REF']
@@ -1564,21 +1544,18 @@ redis-user-delete:
           except urllib.error.HTTPError as e:
               return e.code, e.read().decode()
 
-      # 1) дождаться появления пайплайна ветки (push его создаёт)
       q = urllib.parse.urlencode({'ref': REF, 'order_by': 'id', 'sort': 'desc', 'per_page': 1})
       pid = None
       for _ in range(60):
           st, body = call('GET', f"{API}/pipelines?{q}")
           arr = json.loads(body) if st == 200 else []
           if arr:
-              pid = arr[0]['id']
-              break
+              pid = arr[0]['id']; break
           time.sleep(5)
       if not pid:
           raise SystemExit("ERROR: пайплайн ветки не появился за ~5 мин")
       print(f"pipeline #{pid} для {REF}")
 
-      # 2) прожимать manual-джобы стейджа в несколько проходов до терминала
       played = set()
       for _ in range(60):                       # ~15 мин макс (sleep 15)
           st, body = call('GET', f"{API}/pipelines/{pid}/jobs?per_page=100")
@@ -1607,6 +1584,65 @@ redis-user-delete:
           raise SystemExit(f"ERROR: упали джобы deploy_standalone: {failed}")
       print(f"Прожато джоб: {len(played)}")
       PYEOF
+      }
+
+      FEATURE_BRANCH="feature/${PROJECT_NAME}"
+      REMOVE_BRANCH="feature/remove-${PROJECT_NAME}"
+      git clone "https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/${REDIS_REPO_PATH}.git" redis-repo
+      cd redis-repo
+      DEFAULT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "${REDIS_FALLBACK_BRANCH}")
+      DEPLOYED=0
+
+      # --- 2a) master: если запись есть в дефолтной ветке — убрать через MR + деплой ---
+      git checkout -q "${DEFAULT_BRANCH}"
+      echo "Проверяю ${DEFAULT_BRANCH}..."
+      redis_remove_entry
+      git add "${REDIS_USERS_FILE}"
+      if git diff --cached --quiet; then
+        echo "  в ${DEFAULT_BRANCH} записи ${USER_VAR} нет"
+      else
+        git checkout -q -b "${REMOVE_BRANCH}"
+        MR_DESC="Удаление Redis-учётки при удалении продукта ${PROJECT_NAME} (группа ${TARGET_GROUP_NAME}). Убран ${USER_VAR} из genai-users.yml; CI/CD-переменные ${USER_VAR}/${PASS_VAR} удалены во всех окружениях. После слияния deploy_standalone перегенерирует users.acl без этого пользователя."
+        git commit -q -m "chore: remove redis genai-user ${PROJECT_NAME}"
+        git push \
+          -o merge_request.create \
+          -o merge_request.target="${DEFAULT_BRANCH}" \
+          -o merge_request.title="chore: remove redis genai-user ${PROJECT_NAME}" \
+          -o merge_request.description="${MR_DESC}" \
+          origin "${REMOVE_BRANCH}"
+        echo "  OK: ${REMOVE_BRANCH} запушена, MR в ${DEFAULT_BRANCH} открыт"
+        redis_play_deploy "${REMOVE_BRANCH}"
+        DEPLOYED=1
+      fi
+
+      # --- 2b) оставшаяся create-ветка feature/<product>: почистить, задеплоить, удалить ---
+      if git ls-remote --exit-code --heads origin "${FEATURE_BRANCH}" >/dev/null 2>&1; then
+        echo "Найдена оставшаяся create-ветка ${FEATURE_BRANCH} — чистим"
+        git fetch -q origin "${FEATURE_BRANCH}"
+        git checkout -q -B "${FEATURE_BRANCH}" "origin/${FEATURE_BRANCH}"
+        redis_remove_entry
+        git add "${REDIS_USERS_FILE}"
+        if git diff --cached --quiet; then
+          echo "  в ${FEATURE_BRANCH} записи ${USER_VAR} нет"
+        else
+          git commit -q -m "chore: remove redis genai-user ${PROJECT_NAME}"
+          git push origin "${FEATURE_BRANCH}"
+          # деплой с этой ветки нужен, только если чистый users.acl ещё не раскатан
+          if [ "$DEPLOYED" = "0" ]; then
+            redis_play_deploy "${FEATURE_BRANCH}"
+            DEPLOYED=1
+          fi
+        fi
+        # ветку удаляем ТОЛЬКО после деплоя; её MR закроется автоматически
+        git push origin --delete "${FEATURE_BRANCH}"
+        echo "  OK: create-ветка ${FEATURE_BRANCH} удалена"
+      else
+        echo "Оставшейся create-ветки ${FEATURE_BRANCH} нет — ок"
+      fi
+
+      if [ "$DEPLOYED" = "0" ]; then
+        echo "Учётка ${USER_VAR} нигде в genai-users.yml не найдена — деплой не требовался (переменные уже удалены)."
+      fi
 
 
 # ============================================================================
