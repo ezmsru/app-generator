@@ -1031,6 +1031,7 @@ redis-user:
 
       MR_DESC="Автоматическое заведение Redis-учётки для нового продукта ${PROJECT_NAME} (группа ${TARGET_GROUP_NAME}). Добавлен пользователь ${USER_VAR} в genai-users.yml — базовый ACL (strings/lists/hash/pub-sub/TTL/transactions), keyspace ~${PROJECT_NAME}*. CI/CD-переменные ${USER_VAR}/${PASS_VAR} заведены во всех окружениях (в каждом окружении свой случайный пароль). Деплой (stage deploy_standalone) запущен автоматически с этой ветки."
       git commit -m "feat: redis genai-user для ${PROJECT_NAME}"
+      SHA=$(git rev-parse HEAD)
       git push \
         -o merge_request.create \
         -o merge_request.target="${DEFAULT_BRANCH}" \
@@ -1040,10 +1041,11 @@ redis-user:
       echo "OK: ветка ${FEATURE_BRANCH} запушена, MR в ${DEFAULT_BRANCH} открыт"
 
       # --- 3) Авто-прожатие manual-джоб стейджа deploy_standalone на пайплайне ветки ---
-      export GEN_TOKEN="${GITLAB_TUZ_TOKEN}" GEN_API="${API}" GEN_REF="${FEATURE_BRANCH}"
+      export GEN_TOKEN="${GITLAB_TUZ_TOKEN}" GEN_API="${API}" GEN_REF="${FEATURE_BRANCH}" GEN_SHA="${SHA}"
       python3 - <<'PYEOF'
       import os, json, time, urllib.request, urllib.parse, urllib.error
       TOKEN = os.environ['GEN_TOKEN']; API = os.environ['GEN_API']; REF = os.environ['GEN_REF']
+      SHA = os.environ.get('GEN_SHA') or ''
       STAGE = 'deploy_standalone'
 
       def call(method, url):
@@ -1055,8 +1057,12 @@ redis-user:
           except urllib.error.HTTPError as e:
               return e.code, e.read().decode()
 
-      # 1) дождаться появления пайплайна ветки (push его создаёт)
-      q = urllib.parse.urlencode({'ref': REF, 'order_by': 'id', 'sort': 'desc', 'per_page': 1})
+      # 1) дождаться пайплайна ИМЕННО нашего коммита (по SHA, не "последний по ветке" —
+      #    иначе можно поймать предыдущий пайплайн ветки)
+      params = {'ref': REF, 'order_by': 'id', 'sort': 'desc', 'per_page': 1}
+      if SHA:
+          params['sha'] = SHA
+      q = urllib.parse.urlencode(params)
       pid = None
       for _ in range(60):
           st, body = call('GET', f"{API}/pipelines?{q}")
@@ -1535,10 +1541,11 @@ redis-user-delete:
 
       # helper: дождаться пайплайна ветки $1 и прожать deploy_standalone до терминала
       redis_play_deploy() {
-      export GEN_TOKEN="${GITLAB_TUZ_TOKEN}" GEN_API="${API}" GEN_REF="$1"
+      export GEN_TOKEN="${GITLAB_TUZ_TOKEN}" GEN_API="${API}" GEN_REF="$1" GEN_SHA="$2"
       python3 - <<'PYEOF'
       import os, json, time, urllib.request, urllib.parse, urllib.error
       TOKEN = os.environ['GEN_TOKEN']; API = os.environ['GEN_API']; REF = os.environ['GEN_REF']
+      SHA = os.environ.get('GEN_SHA') or ''
       STAGE = 'deploy_standalone'
 
       def call(method, url):
@@ -1550,7 +1557,14 @@ redis-user-delete:
           except urllib.error.HTTPError as e:
               return e.code, e.read().decode()
 
-      q = urllib.parse.urlencode({'ref': REF, 'order_by': 'id', 'sort': 'desc', 'per_page': 1})
+      # Ищем пайплайн СТРОГО по SHA запушенного коммита, а не "последний по ветке":
+      # новый пайплайн создаётся не мгновенно, и запрос по ref вернул бы ПРЕДЫДУЩИЙ
+      # (create-пайплайн, где deploy_standalone уже success) → ложный успех и снос
+      # ветки до раскатки нашего коммита.
+      params = {'ref': REF, 'order_by': 'id', 'sort': 'desc', 'per_page': 1}
+      if SHA:
+          params['sha'] = SHA
+      q = urllib.parse.urlencode(params)
       pid = None
       for _ in range(60):
           st, body = call('GET', f"{API}/pipelines?{q}")
@@ -1559,7 +1573,7 @@ redis-user-delete:
               pid = arr[0]['id']; break
           time.sleep(5)
       if not pid:
-          raise SystemExit("ERROR: пайплайн ветки не появился за ~5 мин")
+          raise SystemExit(f"ERROR: пайплайн для коммита {SHA[:8] or REF} не появился за ~5 мин")
       print(f"pipeline #{pid} для {REF}")
 
       def pipe_status():
@@ -1624,6 +1638,7 @@ redis-user-delete:
         git checkout -q -b "${REMOVE_BRANCH}"
         MR_DESC="Удаление Redis-учётки при удалении продукта ${PROJECT_NAME} (группа ${TARGET_GROUP_NAME}). Убран ${USER_VAR} из genai-users.yml; CI/CD-переменные ${USER_VAR}/${PASS_VAR} удалены во всех окружениях. После слияния deploy_standalone перегенерирует users.acl без этого пользователя."
         git commit -q -m "chore: remove redis genai-user ${PROJECT_NAME}"
+        SHA=$(git rev-parse HEAD)
         git push \
           -o merge_request.create \
           -o merge_request.target="${DEFAULT_BRANCH}" \
@@ -1631,7 +1646,7 @@ redis-user-delete:
           -o merge_request.description="${MR_DESC}" \
           origin "${REMOVE_BRANCH}"
         echo "  OK: ${REMOVE_BRANCH} запушена, MR в ${DEFAULT_BRANCH} открыт"
-        redis_play_deploy "${REMOVE_BRANCH}"
+        redis_play_deploy "${REMOVE_BRANCH}" "${SHA}"
         DEPLOYED=1
       fi
 
@@ -1655,11 +1670,13 @@ redis-user-delete:
             git push origin --delete "${FEATURE_BRANCH}"
           else
             git commit -q -m "chore: remove redis genai-user ${PROJECT_NAME}"
+            SHA=$(git rev-parse HEAD)
             git push origin "${FEATURE_BRANCH}"
-            # redis_play_deploy СТРОГО ждёт success deploy_standalone (значит билд УЖЕ
+            # redis_play_deploy по SHA дожидается ИМЕННО нашего пайплайна (не пред.
+            # create-пайплайна) и СТРОГО ждёт success deploy_standalone (билд УЖЕ
             # прошёл). Только ПОСЛЕ этого удаляем ветку — иначе снесём ref во время
             # билда. При неуспехе функция падает (set -e) → ветка НЕ удаляется.
-            redis_play_deploy "${FEATURE_BRANCH}"
+            redis_play_deploy "${FEATURE_BRANCH}" "${SHA}"
             DEPLOYED=1
             git push origin --delete "${FEATURE_BRANCH}"
           fi
