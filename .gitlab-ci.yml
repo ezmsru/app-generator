@@ -1141,8 +1141,10 @@ pg-user:
         postgres|template0|template1|root|admin)
           echo "ERROR: имя '${PG_NAME}' зарезервировано — отказ"; exit 1;;
       esac
-      # Случайный пароль (24 alnum) — безопасен как SQL-литерал
-      PG_PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)
+      # Случайный пароль (48 hex) — безопасен как SQL-литерал. head-c читает РОВНО
+      # 24 байта из файла и выходит (0) → нет SIGPIPE (в отличие от tr</dev/urandom|head,
+      # который под pipefail роняет джобу кодом 141).
+      PG_PASSWORD=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
       SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15"
       export SSHPASS="$PG_SSH_PASSWORD"   # sshpass -e: пароль из env, не в argv раннера
       echo "=== PostgreSQL: продукт ${PROJECT_NAME} → роль/БД ${PG_NAME} на ${PG_CONTAINER} (${PG_STAND}) ==="
@@ -1170,21 +1172,25 @@ pg-user:
       ) || { echo "$OUT"; echo "ERROR: SSH/psql завершились с ошибкой"; exit 1; }
       echo "$OUT"
 
-      if echo "$OUT" | grep -q 'ERR_NO_CONTAINER'; then
-        echo "ERROR: контейнер '${PG_CONTAINER}' не найден на ${PG_SSH_HOST}"; exit 1
-      fi
+      case "$OUT" in
+        *ERR_NO_CONTAINER*)
+          echo "ERROR: контейнер '${PG_CONTAINER}' не найден на ${PG_SSH_HOST}"; exit 1;;
+      esac
 
       echo ""
       echo "======================================================================"
-      if echo "$OUT" | grep -q 'CREATE ROLE'; then
-        echo "  PostgreSQL-учётка СОЗДАНА. Перенесите в PAM ВРУЧНУЮ:"
-        echo "    путь: /MegaFon/Common/Data-Analytics/${PG_STAND}/${PAM_SOURCE}/${PROJECT_NAME}_postgres_db_password"
-        echo "    property username = ${PG_NAME}"
-        echo "    property password = ${PG_PASSWORD}"
-      else
-        echo "  Роль ${PG_NAME} уже существовала — пароль НЕ менялся (в PAM оставьте текущий)."
-        echo "  База и гранты приведены к нужному состоянию."
-      fi
+      case "$OUT" in
+        *"CREATE ROLE"*)
+          echo "  PostgreSQL-учётка СОЗДАНА. Перенесите в PAM ВРУЧНУЮ:"
+          echo "    путь: /MegaFon/Common/Data-Analytics/${PG_STAND}/${PAM_SOURCE}/${PROJECT_NAME}_postgres_db_password"
+          echo "    property username = ${PG_NAME}"
+          echo "    property password = ${PG_PASSWORD}"
+          ;;
+        *)
+          echo "  Роль ${PG_NAME} уже существовала — пароль НЕ менялся (в PAM оставьте текущий)."
+          echo "  База и гранты приведены к нужному состоянию."
+          ;;
+      esac
       echo "======================================================================"
 
 
@@ -1681,12 +1687,14 @@ pg-user-delete:
       set -e
       echo "$OUT"
 
-      if echo "$OUT" | grep -q 'ERR_NO_CONTAINER'; then
-        echo "ERROR: контейнер '${PG_CONTAINER}' не найден на ${PG_SSH_HOST}"; exit 1
-      fi
-      if echo "$OUT" | grep -q 'ERR_OWNER_MISMATCH'; then
-        echo "ОТКАЗ: БД ${PG_NAME} принадлежит другому владельцу — не наша, НИЧЕГО не удалено."; exit 1
-      fi
+      case "$OUT" in
+        *ERR_NO_CONTAINER*)
+          echo "ERROR: контейнер '${PG_CONTAINER}' не найден на ${PG_SSH_HOST}"; exit 1;;
+      esac
+      case "$OUT" in
+        *ERR_OWNER_MISMATCH*)
+          echo "ОТКАЗ: БД ${PG_NAME} принадлежит другому владельцу — не наша, НИЧЕГО не удалено."; exit 1;;
+      esac
       if [ "$rc" -ne 0 ]; then
         echo "ERROR: SSH/psql завершились с ошибкой (rc=$rc), см. вывод выше"; exit 1
       fi
