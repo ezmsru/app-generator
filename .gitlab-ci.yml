@@ -965,9 +965,12 @@ redis-user:
       # только в scope '*' (All), без дублей по каждому environment. Детерминирован →
       # overwrite=True. В окружении GitLab возьмёт '*' логин, если нет более точного.
       upsert(user_var, login, False, '*', overwrite=True)
-      # Пароль — свой в КАЖДОМ окружении (create-only: повтор не ротирует уже
-      # заведённый, иначе сломался бы users.acl до передеплоя окружения).
-      for sc in sorted(scopes):
+      # Пароль — свой в КАЖДОМ ИМЕНОВАННОМ окружении, но НЕ в '*' (All): общий
+      # '*'-пароль не нужен, у каждого стенда свой. create-only (повтор не ротирует).
+      pass_scopes = [sc for sc in sorted(scopes) if sc != '*']
+      if not pass_scopes:
+          pass_scopes = ['*']   # именованных окружений нет — иначе логин остался бы без пароля
+      for sc in pass_scopes:
           upsert(pass_var, secrets.token_hex(24), True, sc, overwrite=False)
       PYEOF
 
