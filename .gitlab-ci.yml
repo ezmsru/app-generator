@@ -1557,8 +1557,16 @@ redis-user-delete:
           raise SystemExit("ERROR: пайплайн ветки не появился за ~5 мин")
       print(f"pipeline #{pid} для {REF}")
 
+      def pipe_status():
+          st, body = call('GET', f"{API}/pipelines/{pid}")
+          return json.loads(body).get('status') if st == 200 else None
+
+      # deploy_standalone разблокируется ТОЛЬКО после успешной сборки (build_image
+      # и т.д.). Пока джобы стейджа не терминальны — ждём; параллельно прожимаем
+      # ставшие manual. Если пайплайн упал/отменён (напр. build_image) — выходим.
+      TRANSIENT = ('created', 'pending', 'running', 'manual', 'waiting_for_resource', 'preparing', 'scheduled')
       played = set()
-      for _ in range(60):                       # ~15 мин макс (sleep 15)
+      for _ in range(80):                       # ~20 мин макс (sleep 15)
           st, body = call('GET', f"{API}/pipelines/{pid}/jobs?per_page=100")
           jobs = json.loads(body) if st == 200 else []
           stage_jobs = [j for j in jobs if j.get('stage') == STAGE]
@@ -1569,21 +1577,27 @@ redis-user-delete:
                       played.add(j['id']); print(f"  ▶ play {j['name']} (#{j['id']})")
                   else:
                       print(f"  ! {j['name']} (#{j['id']}): HTTP {ps} {pb[:150]}")
-          transient = [j for j in stage_jobs if j.get('status') in ('manual', 'created', 'pending', 'running')]
+          transient = [j for j in stage_jobs if j.get('status') in TRANSIENT]
           if stage_jobs and not transient:
+              break
+          if pipe_status() in ('failed', 'canceled', 'skipped'):
               break
           time.sleep(15)
 
+      # СТРОГО: деплой ОБЯЗАН быть успешным. Иначе SystemExit → вызывающий шаг
+      # под set -e падает и ветку НЕ удаляет (иначе снесём ветку до раскатки).
       st, body = call('GET', f"{API}/pipelines/{pid}/jobs?per_page=100")
       jobs = json.loads(body) if st == 200 else []
       summary = [(j['name'], j['status']) for j in jobs if j.get('stage') == STAGE]
-      print("Итог deploy_standalone:", summary)
+      print(f"Итог deploy_standalone: {summary} | пайплайн: {pipe_status()}")
       if not summary:
-          print("WARN: в пайплайне ветки не найден стейдж deploy_standalone — проверь конфиг redis-репо")
-      failed = [n for n, s in summary if s == 'failed']
-      if failed:
-          raise SystemExit(f"ERROR: упали джобы deploy_standalone: {failed}")
-      print(f"Прожато джоб: {len(played)}")
+          raise SystemExit("ERROR: в пайплайне нет стейджа deploy_standalone — деплой НЕ выполнен")
+      not_ok = [(n, s) for n, s in summary if s != 'success']
+      if not_ok:
+          raise SystemExit(
+              f"ERROR: deploy_standalone НЕ завершился успешно: {not_ok} "
+              "(возможно упал build_image или джобы skipped/canceled)")
+      print(f"OK: deploy_standalone успешно, прожато джоб: {len(played)}")
       PYEOF
       }
 
@@ -1695,21 +1709,32 @@ pg-user-delete:
       echo "=== Удаление PostgreSQL-учётки: продукт ${PROJECT_NAME} → роль/БД ${PG_NAME} ==="
 
       # Перед DROP DATABASE сверяем владельца: если база принадлежит не нашей роли
-      # (совпало имя, но база чужая) — отказ. Дроп по точному имени + IF EXISTS.
+      # (совпало имя, но база чужая) — отказ. Дроп точечно + проверка, что исчезла.
       set +e
       OUT=$(sshpass -e ssh $SSHOPTS "${PG_SSH_USER}@${PG_SSH_HOST}" 'bash -s' <<REMOTE
       set -e
       echo '$PG_SSH_PASSWORD' | sudo -S -p '' -v 2>/dev/null || true
-      CID=\$(sudo docker ps --filter name='$PG_CONTAINER' --format '{{.ID}}' | head -n1)
+      # На хосте может быть несколько postgres-контейнеров — печатаем ВСЕ подходящие
+      # (диагностика) и работаем с первым. Имя контейнера жёстко задано переменной.
+      MATCHES=\$(sudo docker ps --filter name='$PG_CONTAINER' --format '{{.ID}} {{.Names}}')
+      echo "containers matching '$PG_CONTAINER':"
+      printf '%s\n' "\$MATCHES"
+      CID=\$(printf '%s\n' "\$MATCHES" | awk 'NF{print \$1; exit}')
       if [ -z "\$CID" ]; then echo 'ERR_NO_CONTAINER'; exit 3; fi
+      echo "using CID=\$CID"
       OWNER=\$(sudo docker exec -i "\$CID" psql -U postgres -tAc "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname='$PG_NAME'" | tr -d '[:space:]')
+      echo "db_owner=[\$OWNER]"
       if [ -z "\$OWNER" ]; then
         echo 'DB_ABSENT'
       elif [ "\$OWNER" != '$PG_NAME' ]; then
         echo "ERR_OWNER_MISMATCH:\$OWNER"; exit 4
       else
-        sudo docker exec -i "\$CID" psql -U postgres -v ON_ERROR_STOP=1 -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$PG_NAME' AND pid<>pg_backend_pid();" >/dev/null
-        sudo docker exec -i "\$CID" psql -U postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$PG_NAME\";"
+        # WITH (FORCE) — PostgreSQL 13+: разрывает активные подключения (pgbouncer/app)
+        # и дропает. Без FORCE дроп падает 'database is being accessed by other users'.
+        sudo docker exec -i "\$CID" psql -U postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$PG_NAME\" WITH (FORCE);"
+        # ПРОВЕРКА: база реально исчезла (не верим на слово)
+        STILL=\$(sudo docker exec -i "\$CID" psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$PG_NAME'" | tr -d '[:space:]')
+        if [ -n "\$STILL" ]; then echo 'ERR_DB_STILL_PRESENT'; exit 5; fi
         echo 'DB_DROPPED'
       fi
       if sudo docker exec -i "\$CID" psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PG_NAME'" | grep -q 1; then
@@ -1732,7 +1757,20 @@ pg-user-delete:
         *ERR_OWNER_MISMATCH*)
           echo "ОТКАЗ: БД ${PG_NAME} принадлежит другому владельцу — не наша, НИЧЕГО не удалено."; exit 1;;
       esac
+      case "$OUT" in
+        *ERR_DB_STILL_PRESENT*)
+          echo "ERROR: DROP выполнен, но БД ${PG_NAME} всё ещё существует — проверь контейнер/подключения (вывод выше)"; exit 1;;
+      esac
       if [ "$rc" -ne 0 ]; then
         echo "ERROR: SSH/psql завершились с ошибкой (rc=$rc), см. вывод выше"; exit 1
       fi
-      echo "OK: PG-учётка ${PG_NAME} удалена (или уже отсутствовала). Секрет в PAM удалите вручную."
+      # Явный итог — что РЕАЛЬНО произошло (без 'удалена или уже отсутствовала')
+      case "$OUT" in
+        *DB_DROPPED*) echo "OK: база ${PG_NAME} удалена";;
+        *DB_ABSENT*)  echo "База ${PG_NAME} в контейнере НЕ найдена (уже удалена/её там нет — см. db_owner выше)";;
+      esac
+      case "$OUT" in
+        *ROLE_DROPPED*) echo "OK: роль ${PG_NAME} удалена";;
+        *ROLE_ABSENT*)  echo "Роль ${PG_NAME} не найдена (уже удалена)";;
+      esac
+      echo "Секрет в PAM удалите вручную."
