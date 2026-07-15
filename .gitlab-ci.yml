@@ -885,7 +885,7 @@ redis-user:
     REDIS_FALLBACK_BRANCH: "master"
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
-    - apk add --no-cache git python3 py3-ruamel.yaml
+    - apk add --no-cache git python3
     - git config --global user.email "it-reporting-deployment-devops@megafon.ru"
     - git config --global user.name "CICD Generator"
   script:
@@ -980,10 +980,8 @@ redis-user:
       export GEN_USER_VAR="${USER_VAR}" GEN_PASS_VAR="${PASS_VAR}" \
              GEN_KEYSPACE="${PROJECT_NAME}" GEN_USERS_FILE="${REDIS_USERS_FILE}"
       python3 - <<'PYEOF'
-      import os
+      import os, re
       from pathlib import Path
-      from ruamel.yaml import YAML
-      from ruamel.yaml.scalarstring import LiteralScalarString as LS
 
       user_var = os.environ['GEN_USER_VAR']
       pass_var = os.environ['GEN_PASS_VAR']
@@ -995,29 +993,29 @@ redis-user:
       perms = ("-@all +@transaction +select +expire +persist +rpush +del +psubscribe "
                "+exists +llen +lrange +set -discard +lrem +ttl +setex +ltrim +ping "
                "+punsubscribe +get +hget +hset +cluster|slots")
-      block = (
-          f'if [[ -n "${{{user_var}}}" ]] && [[ -n "${{{pass_var}}}" ]]; then\n'
-          f'cat << EOF >> configs/redis/users.acl\n'
-          f'user ${{{user_var}}} on >${{{pass_var}}} ~{keyspace}* {perms}\n'
-          f'EOF\n'
-          f'fi\n'
-      )
 
-      yaml = YAML()
-      yaml.preserve_quotes = True
-      yaml.width = 4096
-      yaml.indent(mapping=2, sequence=4, offset=2)
-
-      with path.open() as f:
-          data = yaml.load(f)
-      users = data['.genai-users']['users_config']
-
-      if any(f"${{{user_var}}}" in str(item) for item in users):
+      # Дописываем блок как ЧИСТЫЙ ТЕКСТ (без ruamel round-trip). Перевыгрузка YAML
+      # реформатит соседние блоки (меняет |→|-, чоппинг), поэтому парсинг НЕ используем —
+      # существующие элементы списка остаются байт-в-байт.
+      text = path.read_text()
+      needle = f"${{{user_var}}}"
+      if needle in text:
           print(f"{user_var} уже есть в genai-users.yml — правку не вносим")
       else:
-          users.append(LS(block))
-          with path.open('w') as f:
-              yaml.dump(data, f)
+          m = re.search(r'^(\s*)-\s*\|', text, re.M)   # отступ элементов по первому '- |'
+          dash = m.group(1) if m else '    '
+          body = dash + '  '
+          item = "\n".join([
+              f"{dash}- |",
+              f'{body}if [[ -n "${{{user_var}}}" ]] && [[ -n "${{{pass_var}}}" ]]; then',
+              f"{body}cat << EOF >> configs/redis/users.acl",
+              f"{body}user ${{{user_var}}} on >${{{pass_var}}} ~{keyspace}* {perms}",
+              f"{body}EOF",
+              f"{body}fi",
+          ])
+          if not text.endswith("\n"):
+              text += "\n"
+          path.write_text(text + item + "\n")
           print(f"{user_var} добавлен в genai-users.yml")
       PYEOF
 
@@ -1406,7 +1404,7 @@ redis-user-delete:
     REDIS_FALLBACK_BRANCH: "master"
   before_script:
     - !reference [.unixrepo_configuration, auth_apk]
-    - apk add --no-cache git python3 py3-ruamel.yaml
+    - apk add --no-cache git python3
     - git config --global user.email "it-reporting-deployment-devops@megafon.ru"
     - git config --global user.name "CICD Generator"
   script:
@@ -1489,30 +1487,42 @@ redis-user-delete:
 
       export GEN_USER_VAR="${USER_VAR}" GEN_USERS_FILE="${REDIS_USERS_FILE}"
       python3 - <<'PYEOF'
-      import os
+      import os, re
       from pathlib import Path
-      from ruamel.yaml import YAML
 
       user_var = os.environ['GEN_USER_VAR']
       path = Path(os.environ['GEN_USERS_FILE'])
       needle = f"${{{user_var}}}"
 
-      yaml = YAML()
-      yaml.preserve_quotes = True
-      yaml.width = 4096
-      yaml.indent(mapping=2, sequence=4, offset=2)
-
-      with path.open() as f:
-          data = yaml.load(f)
-      users = data['.genai-users']['users_config']
-      keep = [item for item in users if needle not in str(item)]
-      removed = len(users) - len(keep)
+      # Вырезаем блок как ЧИСТЫЙ ТЕКСТ (без ruamel round-trip): удаляем только
+      # элемент списка, чьё тело содержит ${<USER_VAR>}; остальные блоки не трогаем.
+      text = path.read_text()
+      lines = text.split("\n")
+      m = re.search(r'^(\s*)-\s*\|', text, re.M)   # отступ элементов по первому '- |'
+      dash = m.group(1) if m else '    '
+      item_re = re.compile(r'^' + re.escape(dash) + r'-\s')
+      body_prefix = dash + '  '
+      out, i, removed, n = [], 0, 0, len(lines)
+      while i < n:
+          if item_re.match(lines[i]):
+              j = i + 1
+              blk = [lines[i]]
+              while j < n and (lines[j] == '' or lines[j].startswith(body_prefix)):
+                  blk.append(lines[j]); j += 1
+              if needle in "\n".join(blk):
+                  removed += 1
+              else:
+                  out.extend(blk)
+              i = j
+          else:
+              out.append(lines[i]); i += 1
       if removed == 0:
           print(f"{user_var} не найден в genai-users.yml — правку не вносим")
       else:
-          users[:] = keep
-          with path.open('w') as f:
-              yaml.dump(data, f)
+          res = "\n".join(out)
+          if res and not res.endswith("\n"):
+              res += "\n"
+          path.write_text(res)
           print(f"{user_var} удалён из genai-users.yml (блоков убрано: {removed})")
       PYEOF
 
