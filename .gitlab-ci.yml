@@ -961,12 +961,13 @@ redis-user:
       user_var = os.environ['GEN_USER_VAR']
       pass_var = os.environ['GEN_PASS_VAR']
       login = os.environ['GEN_LOGIN']
+      # Логин ОДИН на все окружения (значение одинаково = имя продукта) → заводим
+      # только в scope '*' (All), без дублей по каждому environment. Детерминирован →
+      # overwrite=True. В окружении GitLab возьмёт '*' логин, если нет более точного.
+      upsert(user_var, login, False, '*', overwrite=True)
+      # Пароль — свой в КАЖДОМ окружении (create-only: повтор не ротирует уже
+      # заведённый, иначе сломался бы users.acl до передеплоя окружения).
       for sc in sorted(scopes):
-          # Логин детерминирован → можно обновлять. Пароль у КАЖДОГО окружения свой,
-          # генерится случайно и заводится один раз (create-only): повторный запуск
-          # генератора не ротирует уже заведённый пароль (иначе сломался бы users.acl
-          # до передеплоя соответствующего окружения).
-          upsert(user_var, login, False, sc, overwrite=True)
           upsert(pass_var, secrets.token_hex(24), True, sc, overwrite=False)
       PYEOF
 
