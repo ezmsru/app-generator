@@ -119,6 +119,7 @@ stages:
   - fill-template
   - setup-webhook
   - redis-user
+  - pg-user
 
 variables:
   GITLAB_URL: "https://cicd-git.megafon.ru"
@@ -1099,6 +1100,97 @@ redis-user:
 
 
 # ============================================================================
+# ЗАВЕДЕНИЕ POSTGRESQL-УЧЁТКИ (action=create + pg_enabled=true, пока только dev)
+# Postgres крутится в docker на VM vlg-bdata-llmgpu03. Джоба ходит по SSH под
+# bdata-ТУЗом (логин+пароль) → sudo docker exec → psql и создаёт роль + БД +
+# гранты. Идемпотентно: роль create-only (на повторном запуске пароль НЕ
+# меняется, чтобы не разъехаться с PAM); БД create-only; гранты — всегда.
+# Сгенерированный пароль печатается в лог — DevOps вручную кладут username/
+# password в PAM по пути /MegaFon/Common/Data-Analytics/dev/<PAM_SOURCE>/
+# <project>_postgres_db_password (свойства username/password), откуда приложение
+# читает их через ExternalSecret.
+# ПРЕДУСЛОВИЕ: у bdata-ТУЗа есть SSH-доступ на хост и sudo для docker.
+# ============================================================================
+pg-user:
+  stage: pg-user
+  image: $CI_IMAGE
+  resource_group: "pg-llmgpu-dev"
+  needs:
+    - job: validate-params
+      artifacts: true
+  rules:
+    - if: $ACTION == "create" && $PG_ENABLED == "true"
+  variables:
+    PG_SSH_HOST: "vlg-bdata-llmgpu03"
+    PG_CONTAINER: "postgres-llmgpu-dev_postgres"
+    PG_STAND: "dev"
+    # Логин/пароль SSH = bdata-ТУЗ (те же, что для git basic-auth). При необходимости
+    # переопредели PG_SSH_USER / PG_SSH_PASSWORD в Settings → CI/CD → Variables.
+    PG_SSH_USER: "${UNIXREPO_USER}"
+    PG_SSH_PASSWORD: "${MF_BDATA_TUZ_PASSWORD}"
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache openssh-client sshpass
+  script:
+    - |
+      set -e
+      # --- Нормализация: PG-идентификатор (роль=БД) из имени продукта ---
+      PG_NAME=$(echo "$PROJECT_NAME" | tr 'A-Z' 'a-z' | tr '.-' '__')
+      if ! echo "$PG_NAME" | grep -qE '^[a-z0-9][a-z0-9_]*$'; then
+        echo "ERROR: не удалось построить безопасное PG-имя из '${PROJECT_NAME}'"; exit 1
+      fi
+      case "$PG_NAME" in
+        postgres|template0|template1|root|admin)
+          echo "ERROR: имя '${PG_NAME}' зарезервировано — отказ"; exit 1;;
+      esac
+      # Случайный пароль (24 alnum) — безопасен как SQL-литерал
+      PG_PASSWORD=$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)
+      SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15"
+      export SSHPASS="$PG_SSH_PASSWORD"   # sshpass -e: пароль из env, не в argv раннера
+      echo "=== PostgreSQL: продукт ${PROJECT_NAME} → роль/БД ${PG_NAME} на ${PG_CONTAINER} (${PG_STAND}) ==="
+
+      # SSH → sudo docker exec → psql. Роль/БД идемпотентны через \gexec;
+      # гранты выполняются всегда (повтор безопасен). Идентификаторы и литералы
+      # подставляются через psql-переменные :'role'/:"role"/:'pwd' — без инъекций.
+      OUT=$(sshpass -e ssh $SSHOPTS "${PG_SSH_USER}@${PG_SSH_HOST}" 'bash -s' <<REMOTE
+      set -e
+      echo '$PG_SSH_PASSWORD' | sudo -S -p '' -v 2>/dev/null || true
+      CID=\$(sudo docker ps --filter name='$PG_CONTAINER' --format '{{.ID}}' | head -n1)
+      if [ -z "\$CID" ]; then echo 'ERR_NO_CONTAINER'; exit 3; fi
+      sudo docker exec -i "\$CID" psql -U postgres -v ON_ERROR_STOP=1 <<'PSQL'
+      \set role '$PG_NAME'
+      \set pwd '$PG_PASSWORD'
+      SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'role', :'pwd') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role')\gexec
+      SELECT format('CREATE DATABASE %I OWNER %I', :'role', :'role') WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'role')\gexec
+      GRANT ALL PRIVILEGES ON DATABASE :"role" TO :"role";
+      \connect :"role"
+      GRANT ALL ON SCHEMA public TO :"role";
+      GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO :"role";
+      GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO :"role";
+      PSQL
+      REMOTE
+      ) || { echo "$OUT"; echo "ERROR: SSH/psql завершились с ошибкой"; exit 1; }
+      echo "$OUT"
+
+      if echo "$OUT" | grep -q 'ERR_NO_CONTAINER'; then
+        echo "ERROR: контейнер '${PG_CONTAINER}' не найден на ${PG_SSH_HOST}"; exit 1
+      fi
+
+      echo ""
+      echo "======================================================================"
+      if echo "$OUT" | grep -q 'CREATE ROLE'; then
+        echo "  PostgreSQL-учётка СОЗДАНА. Перенесите в PAM ВРУЧНУЮ:"
+        echo "    путь: /MegaFon/Common/Data-Analytics/${PG_STAND}/${PAM_SOURCE}/${PROJECT_NAME}_postgres_db_password"
+        echo "    property username = ${PG_NAME}"
+        echo "    property password = ${PG_PASSWORD}"
+      else
+        echo "  Роль ${PG_NAME} уже существовала — пароль НЕ менялся (в PAM оставьте текущий)."
+        echo "  База и гранты приведены к нужному состоянию."
+      fi
+      echo "======================================================================"
+
+
+# ============================================================================
 # РЕЖИМ УДАЛЕНИЯ (action=delete)
 # Цель задаётся теми же полями, что и при создании: project_name + target_group_name.
 # При action=delete ВСЕ обычные джобы исключены (rules: $ACTION == "create"),
@@ -1499,3 +1591,93 @@ redis-user-delete:
           raise SystemExit(f"ERROR: упали джобы deploy_standalone: {failed}")
       print(f"Прожато джоб: {len(played)}")
       PYEOF
+
+
+# ============================================================================
+# УДАЛЕНИЕ POSTGRESQL-УЧЁТКИ (action=delete, пока только dev)
+# Симметрично pg-user: при удалении приложения сносим его роль и БД в контейнере.
+# БЕЗОПАСНОСТЬ (главное требование): работаем строго по нормализованному имени
+# продукта; перед DROP DATABASE проверяем, что владелец базы == наша роль (если
+# нет — отказ, ничего не трогаем); дроп только по точному имени + IF EXISTS;
+# системные/зарезервированные имена запрещены. Под тем же паролем-подтверждением
+# (DELETE_PASSWORD), что и удаление репозиториев. Секрет в PAM удаляется вручную.
+# ============================================================================
+pg-user-delete:
+  stage: delete
+  image: $CI_IMAGE
+  resource_group: "pg-llmgpu-dev"
+  needs: []
+  rules:
+    - if: $ACTION == "delete"
+  variables:
+    PG_SSH_HOST: "vlg-bdata-llmgpu03"
+    PG_CONTAINER: "postgres-llmgpu-dev_postgres"
+    PG_SSH_USER: "${UNIXREPO_USER}"
+    PG_SSH_PASSWORD: "${MF_BDATA_TUZ_PASSWORD}"
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache openssh-client sshpass
+  script:
+    - |
+      set -e
+      # --- Валидация цели + пароль-гейт (тот же, что delete-repository) ---
+      [ -z "$PROJECT_NAME" ] && echo "ERROR: при action=delete заполните project_name" && exit 1
+      if [ -z "$DELETE_PASSWORD" ]; then
+        echo "ERROR: masked CI-переменная DELETE_PASSWORD не задана — удаление запрещено."; exit 1
+      fi
+      if [ "$DELETE_PASSWORD_INPUT" != "$DELETE_PASSWORD" ]; then
+        echo "ERROR: неверный пароль удаления."; exit 1
+      fi
+
+      PG_NAME=$(echo "$PROJECT_NAME" | tr 'A-Z' 'a-z' | tr '.-' '__')
+      if ! echo "$PG_NAME" | grep -qE '^[a-z0-9][a-z0-9_]*$'; then
+        echo "ERROR: не удалось построить безопасное PG-имя из '${PROJECT_NAME}'"; exit 1
+      fi
+      case "$PG_NAME" in
+        postgres|template0|template1|root|admin)
+          echo "ERROR: имя '${PG_NAME}' зарезервировано — отказ (защита от сноса системной БД)"; exit 1;;
+      esac
+      SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15"
+      export SSHPASS="$PG_SSH_PASSWORD"   # sshpass -e: пароль из env, не в argv раннера
+      echo "=== Удаление PostgreSQL-учётки: продукт ${PROJECT_NAME} → роль/БД ${PG_NAME} ==="
+
+      # Перед DROP DATABASE сверяем владельца: если база принадлежит не нашей роли
+      # (совпало имя, но база чужая) — отказ. Дроп по точному имени + IF EXISTS.
+      set +e
+      OUT=$(sshpass -e ssh $SSHOPTS "${PG_SSH_USER}@${PG_SSH_HOST}" 'bash -s' <<REMOTE
+      set -e
+      echo '$PG_SSH_PASSWORD' | sudo -S -p '' -v 2>/dev/null || true
+      CID=\$(sudo docker ps --filter name='$PG_CONTAINER' --format '{{.ID}}' | head -n1)
+      if [ -z "\$CID" ]; then echo 'ERR_NO_CONTAINER'; exit 3; fi
+      OWNER=\$(sudo docker exec -i "\$CID" psql -U postgres -tAc "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname='$PG_NAME'" | tr -d '[:space:]')
+      if [ -z "\$OWNER" ]; then
+        echo 'DB_ABSENT'
+      elif [ "\$OWNER" != '$PG_NAME' ]; then
+        echo "ERR_OWNER_MISMATCH:\$OWNER"; exit 4
+      else
+        sudo docker exec -i "\$CID" psql -U postgres -v ON_ERROR_STOP=1 -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$PG_NAME' AND pid<>pg_backend_pid();" >/dev/null
+        sudo docker exec -i "\$CID" psql -U postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$PG_NAME\";"
+        echo 'DB_DROPPED'
+      fi
+      if sudo docker exec -i "\$CID" psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PG_NAME'" | grep -q 1; then
+        sudo docker exec -i "\$CID" psql -U postgres -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS \"$PG_NAME\";"
+        echo 'ROLE_DROPPED'
+      else
+        echo 'ROLE_ABSENT'
+      fi
+      REMOTE
+      )
+      rc=$?
+      set -e
+      echo "$OUT"
+
+      if echo "$OUT" | grep -q 'ERR_NO_CONTAINER'; then
+        echo "ERROR: контейнер '${PG_CONTAINER}' не найден на ${PG_SSH_HOST}"; exit 1
+      fi
+      if echo "$OUT" | grep -q 'ERR_OWNER_MISMATCH'; then
+        echo "ОТКАЗ: БД ${PG_NAME} принадлежит другому владельцу — не наша, НИЧЕГО не удалено."; exit 1
+      fi
+      if [ "$rc" -ne 0 ]; then
+        echo "ERROR: SSH/psql завершились с ошибкой (rc=$rc), см. вывод выше"; exit 1
+      fi
+      echo "OK: PG-учётка ${PG_NAME} удалена (или уже отсутствовала). Секрет в PAM удалите вручную."
