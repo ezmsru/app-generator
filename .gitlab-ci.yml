@@ -118,6 +118,7 @@ stages:
   - fill-config
   - fill-template
   - setup-webhook
+  - redis-user
 
 variables:
   GITLAB_URL: "https://cicd-git.megafon.ru"
@@ -855,6 +856,249 @@ register-in-dsl:
 
 
 # ============================================================================
+# ЗАВЕДЕНИЕ REDIS-УЧЁТКИ (action=create + redis_enabled=true)
+# Общий standalone-Redis обслуживает много продуктов; учётки хранятся в одном
+# файле .gitlab/genai-users.yml (ACL) целевого repo. Джоба:
+#   1) заводит CI/CD-переменные REDIS_<PRODUCT>_USER / _USER_PASSWORD во всех
+#      environment_scope, что уже есть в redis-репо (у каждого окружения свой
+#      случайный masked-пароль, create-only — повторный запуск не ротирует);
+#   2) добавляет ACL-блок пользователя в genai-users.yml (средний/безопасный набор);
+#   3) пушит ветку feature/<product>, открывает MR в дефолтную ветку redis-репо
+#      и авто-прожимает manual-джобы стейджа deploy_standalone на пайплайне ветки.
+# ПРЕДУСЛОВИЕ: у ТУЗа (GITLAB_TUZ_TOKEN / UNIXREPO_USER) должен быть Maintainer на
+# redis-репо — иначе управление CI/CD Variables вернёт 403.
+# ============================================================================
+redis-user:
+  stage: redis-user
+  image: $CI_IMAGE
+  # Последовательная запись в общий users.acl из разных пайплайнов — по одному.
+  resource_group: "redis-genai-users"
+  needs:
+    - job: validate-params
+      artifacts: true
+  rules:
+    - if: $ACTION == "create" && $REDIS_ENABLED == "true"
+  variables:
+    REDIS_REPO_PATH: "middle/itbigdata/devops_tools/docker-compose-manifests/redis"
+    REDIS_USERS_FILE: ".gitlab/genai-users.yml"
+    REDIS_FALLBACK_BRANCH: "master"
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache git python3 py3-ruamel.yaml
+    - git config --global user.email "it-reporting-deployment-devops@megafon.ru"
+    - git config --global user.name "CICD Generator"
+  script:
+    - |
+      set -e
+      # Имя переменной: UPPER + '-'/'.' → '_' (как у существующих: SVC_COST_SCAN, RMP_GENAI, ...)
+      PRODUCT_UPPER=$(echo "$PROJECT_NAME" | tr 'a-z' 'A-Z' | tr '.-' '__')
+      REDIS_LOGIN="$PROJECT_NAME"                 # redis-логин = имя продукта (нижний регистр)
+      USER_VAR="REDIS_${PRODUCT_UPPER}_USER"
+      PASS_VAR="REDIS_${PRODUCT_UPPER}_USER_PASSWORD"
+      REPO_ENC=$(python3 -c "import urllib.parse,os;print(urllib.parse.quote(os.environ['REDIS_REPO_PATH'],safe=''))")
+      API="${GITLAB_URL}/api/v4/projects/${REPO_ENC}"
+      echo "=== Redis genai-user: продукт ${PROJECT_NAME} → ${USER_VAR} ==="
+
+      # --- 1) CI/CD Variables: USER + PASSWORD во всех существующих environment_scope ---
+      export GEN_TOKEN="${GITLAB_TUZ_TOKEN}" GEN_API="${API}" \
+             GEN_USER_VAR="${USER_VAR}" GEN_PASS_VAR="${PASS_VAR}" \
+             GEN_LOGIN="${REDIS_LOGIN}"
+      python3 - <<'PYEOF'
+      import os, json, secrets, urllib.request, urllib.parse, urllib.error
+      TOKEN = os.environ['GEN_TOKEN']; API = os.environ['GEN_API']
+
+      def call(method, url, data=None):
+          body = urllib.parse.urlencode(data).encode() if data else None
+          req = urllib.request.Request(url, data=body, method=method)
+          req.add_header('PRIVATE-TOKEN', TOKEN)
+          try:
+              with urllib.request.urlopen(req) as r:
+                  return r.status, r.read().decode()
+          except urllib.error.HTTPError as e:
+              return e.code, e.read().decode()
+
+      # Уникальные environment_scope существующих переменных репо
+      scopes, page = set(), 1
+      while True:
+          st, body = call('GET', f"{API}/variables?per_page=100&page={page}")
+          if st != 200:
+              print(f"WARN: не удалось прочитать переменные (HTTP {st}): {body[:200]}")
+              break
+          arr = json.loads(body)
+          if not arr:
+              break
+          for v in arr:
+              scopes.add(v.get('environment_scope', '*'))
+          if len(arr) < 100:
+              break
+          page += 1
+      if not scopes:
+          scopes = {'*'}
+      print("environment scopes:", sorted(scopes))
+
+      def upsert(key, value, masked, scope, overwrite):
+          data = {'key': key, 'value': value, 'environment_scope': scope,
+                  'masked': str(masked).lower(), 'protected': 'false',
+                  'variable_type': 'env_var'}
+          st, body = call('POST', f"{API}/variables", data)
+          if st in (200, 201):
+              print(f"  + {key} @ {scope}")
+              return
+          # POST 400 → переменная с таким key+scope уже есть
+          if not overwrite:
+              print(f"  = {key} @ {scope} (уже есть — не трогаем)")
+              return
+          flt = urllib.parse.urlencode({'filter[environment_scope]': scope})
+          st2, body2 = call('PUT', f"{API}/variables/{key}?{flt}",
+                            {'value': value, 'environment_scope': scope,
+                             'masked': str(masked).lower(), 'protected': 'false'})
+          if st2 in (200, 201):
+              print(f"  ~ {key} @ {scope} (обновлён)")
+          else:
+              raise SystemExit(f"ERROR {key} @ {scope}: POST {st} {body[:200]} | PUT {st2} {body2[:200]}")
+
+      user_var = os.environ['GEN_USER_VAR']
+      pass_var = os.environ['GEN_PASS_VAR']
+      login = os.environ['GEN_LOGIN']
+      for sc in sorted(scopes):
+          # Логин детерминирован → можно обновлять. Пароль у КАЖДОГО окружения свой,
+          # генерится случайно и заводится один раз (create-only): повторный запуск
+          # генератора не ротирует уже заведённый пароль (иначе сломался бы users.acl
+          # до передеплоя соответствующего окружения).
+          upsert(user_var, login, False, sc, overwrite=True)
+          upsert(pass_var, secrets.token_hex(24), True, sc, overwrite=False)
+      PYEOF
+
+      # --- 2) genai-users.yml: ACL-блок пользователя + ветка + MR ---
+      FEATURE_BRANCH="feature/${PROJECT_NAME}"
+      git clone "https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/${REDIS_REPO_PATH}.git" redis-repo
+      cd redis-repo
+      DEFAULT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "${REDIS_FALLBACK_BRANCH}")
+      git checkout "${FEATURE_BRANCH}" 2>/dev/null || git checkout -b "${FEATURE_BRANCH}"
+
+      export GEN_USER_VAR="${USER_VAR}" GEN_PASS_VAR="${PASS_VAR}" \
+             GEN_KEYSPACE="${PROJECT_NAME}" GEN_USERS_FILE="${REDIS_USERS_FILE}"
+      python3 - <<'PYEOF'
+      import os
+      from pathlib import Path
+      from ruamel.yaml import YAML
+      from ruamel.yaml.scalarstring import LiteralScalarString as LS
+
+      user_var = os.environ['GEN_USER_VAR']
+      pass_var = os.environ['GEN_PASS_VAR']
+      keyspace = os.environ['GEN_KEYSPACE']
+      path = Path(os.environ['GEN_USERS_FILE'])
+
+      # Средний/безопасный ACL-набор: база strings/lists/pub-sub/TTL/transactions + hash.
+      # keyspace ~<product>*. Без @admin/@dangerous/keys/flush.
+      perms = ("-@all +@transaction +select +expire +persist +rpush +del +psubscribe "
+               "+exists +llen +lrange +set -discard +lrem +ttl +setex +ltrim +ping "
+               "+punsubscribe +get +hget +hset +cluster|slots")
+      block = (
+          f'if [[ -n "${{{user_var}}}" ]] && [[ -n "${{{pass_var}}}" ]]; then\n'
+          f'cat << EOF >> configs/redis/users.acl\n'
+          f'user ${{{user_var}}} on >${{{pass_var}}} ~{keyspace}* {perms}\n'
+          f'EOF\n'
+          f'fi\n'
+      )
+
+      yaml = YAML()
+      yaml.preserve_quotes = True
+      yaml.width = 4096
+      yaml.indent(mapping=2, sequence=4, offset=2)
+
+      with path.open() as f:
+          data = yaml.load(f)
+      users = data['.genai-users']['users_config']
+
+      if any(f"${{{user_var}}}" in str(item) for item in users):
+          print(f"{user_var} уже есть в genai-users.yml — правку не вносим")
+      else:
+          users.append(LS(block))
+          with path.open('w') as f:
+              yaml.dump(data, f)
+          print(f"{user_var} добавлен в genai-users.yml")
+      PYEOF
+
+      git add "${REDIS_USERS_FILE}"
+      if git diff --cached --quiet; then
+        echo "Нет изменений в ${REDIS_USERS_FILE} — MR не требуется (пользователь уже заведён)"
+        exit 0
+      fi
+
+      MR_DESC="Автоматическое заведение Redis-учётки для нового продукта ${PROJECT_NAME} (группа ${TARGET_GROUP_NAME}). Добавлен пользователь ${USER_VAR} в genai-users.yml — базовый ACL (strings/lists/hash/pub-sub/TTL/transactions), keyspace ~${PROJECT_NAME}*. CI/CD-переменные ${USER_VAR}/${PASS_VAR} заведены во всех окружениях (в каждом окружении свой случайный пароль). Деплой (stage deploy_standalone) запущен автоматически с этой ветки."
+      git commit -m "feat: redis genai-user для ${PROJECT_NAME}"
+      git push \
+        -o merge_request.create \
+        -o merge_request.target="${DEFAULT_BRANCH}" \
+        -o merge_request.title="feat: redis genai-user для ${PROJECT_NAME}" \
+        -o merge_request.description="${MR_DESC}" \
+        origin "${FEATURE_BRANCH}"
+      echo "OK: ветка ${FEATURE_BRANCH} запушена, MR в ${DEFAULT_BRANCH} открыт"
+
+      # --- 3) Авто-прожатие manual-джоб стейджа deploy_standalone на пайплайне ветки ---
+      export GEN_TOKEN="${GITLAB_TUZ_TOKEN}" GEN_API="${API}" GEN_REF="${FEATURE_BRANCH}"
+      python3 - <<'PYEOF'
+      import os, json, time, urllib.request, urllib.parse, urllib.error
+      TOKEN = os.environ['GEN_TOKEN']; API = os.environ['GEN_API']; REF = os.environ['GEN_REF']
+      STAGE = 'deploy_standalone'
+
+      def call(method, url):
+          req = urllib.request.Request(url, method=method)
+          req.add_header('PRIVATE-TOKEN', TOKEN)
+          try:
+              with urllib.request.urlopen(req) as r:
+                  return r.status, r.read().decode()
+          except urllib.error.HTTPError as e:
+              return e.code, e.read().decode()
+
+      # 1) дождаться появления пайплайна ветки (push его создаёт)
+      q = urllib.parse.urlencode({'ref': REF, 'order_by': 'id', 'sort': 'desc', 'per_page': 1})
+      pid = None
+      for _ in range(60):
+          st, body = call('GET', f"{API}/pipelines?{q}")
+          arr = json.loads(body) if st == 200 else []
+          if arr:
+              pid = arr[0]['id']
+              break
+          time.sleep(5)
+      if not pid:
+          raise SystemExit("ERROR: пайплайн ветки не появился за ~5 мин")
+      print(f"pipeline #{pid} для {REF}")
+
+      # 2) прожимать manual-джобы стейджа в несколько проходов: часть становится
+      #    доступной только после запуска предшественников (needs). Ждём терминала.
+      played = set()
+      for _ in range(60):                       # ~15 мин макс (sleep 15)
+          st, body = call('GET', f"{API}/pipelines/{pid}/jobs?per_page=100")
+          jobs = json.loads(body) if st == 200 else []
+          stage_jobs = [j for j in jobs if j.get('stage') == STAGE]
+          for j in stage_jobs:
+              if j.get('status') == 'manual' and j['id'] not in played:
+                  ps, pb = call('POST', f"{API}/jobs/{j['id']}/play")
+                  if ps in (200, 201):
+                      played.add(j['id']); print(f"  ▶ play {j['name']} (#{j['id']})")
+                  else:
+                      print(f"  ! {j['name']} (#{j['id']}): HTTP {ps} {pb[:150]}")
+          transient = [j for j in stage_jobs if j.get('status') in ('manual', 'created', 'pending', 'running')]
+          if stage_jobs and not transient:
+              break
+          time.sleep(15)
+
+      st, body = call('GET', f"{API}/pipelines/{pid}/jobs?per_page=100")
+      jobs = json.loads(body) if st == 200 else []
+      summary = [(j['name'], j['status']) for j in jobs if j.get('stage') == STAGE]
+      print("Итог deploy_standalone:", summary)
+      if not summary:
+          print("WARN: в пайплайне ветки не найден стейдж deploy_standalone — проверь конфиг redis-репо")
+      failed = [n for n, s in summary if s == 'failed']
+      if failed:
+          raise SystemExit(f"ERROR: упали джобы deploy_standalone: {failed}")
+      print(f"Прожато джоб: {len(played)}")
+      PYEOF
+
+
+# ============================================================================
 # РЕЖИМ УДАЛЕНИЯ (action=delete)
 # Цель задаётся теми же полями, что и при создании: project_name + target_group_name.
 # При action=delete ВСЕ обычные джобы исключены (rules: $ACTION == "create"),
@@ -1045,3 +1289,213 @@ delete-repository:
       done
       rm -rf /tmp/dsl-verify
       [ "$i" -le 60 ] && echo "OK: ${PROJECT_NAME} удалён из ${DSL_TARGET_BRANCH}"
+
+
+# ============================================================================
+# УДАЛЕНИЕ REDIS-УЧЁТКИ (action=delete)
+# Симметрично redis-user: при удалении приложения убираем его Redis-учётку —
+#   1) удаляем CI/CD-переменные REDIS_<PRODUCT>_USER / _USER_PASSWORD во всех scope;
+#   2) удаляем ACL-блок пользователя из .gitlab/genai-users.yml (ветка + MR);
+#   3) авто-прожимаем deploy_standalone, чтобы users.acl перегенерился без юзера.
+# Идемпотентно: если учётки/переменных нет — просто пропускаем (для приложений
+# без Redis джоба отработает вхолостую). Под тем же паролем-подтверждением
+# (DELETE_PASSWORD), что и удаление репозиториев.
+# ============================================================================
+redis-user-delete:
+  stage: delete
+  image: $CI_IMAGE
+  resource_group: "redis-genai-users"
+  needs: []
+  rules:
+    - if: $ACTION == "delete"
+  variables:
+    REDIS_REPO_PATH: "middle/itbigdata/devops_tools/docker-compose-manifests/redis"
+    REDIS_USERS_FILE: ".gitlab/genai-users.yml"
+    REDIS_FALLBACK_BRANCH: "master"
+  before_script:
+    - !reference [.unixrepo_configuration, auth_apk]
+    - apk add --no-cache git python3 py3-ruamel.yaml
+    - git config --global user.email "it-reporting-deployment-devops@megafon.ru"
+    - git config --global user.name "CICD Generator"
+  script:
+    - |
+      set -e
+      # --- Валидация цели (в режиме delete validate-params не запускается) ---
+      [ -z "$PROJECT_NAME" ] && echo "ERROR: при action=delete заполните project_name" && exit 1
+      echo "$PROJECT_NAME" | grep -qE '^[a-z0-9][a-z0-9._-]*$' || { echo "ERROR: project_name: только a-z, 0-9, ., -, _"; exit 1; }
+
+      # --- Проверка пароля (тот же гейт, что и delete-repository) ---
+      if [ -z "$DELETE_PASSWORD" ]; then
+        echo "ERROR: masked CI-переменная DELETE_PASSWORD не задана — удаление запрещено."
+        exit 1
+      fi
+      if [ "$DELETE_PASSWORD_INPUT" != "$DELETE_PASSWORD" ]; then
+        echo "ERROR: неверный пароль удаления."
+        exit 1
+      fi
+
+      PRODUCT_UPPER=$(echo "$PROJECT_NAME" | tr 'a-z' 'A-Z' | tr '.-' '__')
+      USER_VAR="REDIS_${PRODUCT_UPPER}_USER"
+      PASS_VAR="REDIS_${PRODUCT_UPPER}_USER_PASSWORD"
+      REPO_ENC=$(python3 -c "import urllib.parse,os;print(urllib.parse.quote(os.environ['REDIS_REPO_PATH'],safe=''))")
+      API="${GITLAB_URL}/api/v4/projects/${REPO_ENC}"
+      echo "=== Удаление Redis-учётки: продукт ${PROJECT_NAME} → ${USER_VAR} ==="
+
+      # --- 1) CI/CD Variables: удалить USER + PASSWORD во всех scope, где они есть ---
+      export GEN_TOKEN="${GITLAB_TUZ_TOKEN}" GEN_API="${API}" \
+             GEN_USER_VAR="${USER_VAR}" GEN_PASS_VAR="${PASS_VAR}"
+      python3 - <<'PYEOF'
+      import os, json, urllib.request, urllib.parse, urllib.error
+      TOKEN = os.environ['GEN_TOKEN']; API = os.environ['GEN_API']
+      keys = {os.environ['GEN_USER_VAR'], os.environ['GEN_PASS_VAR']}
+
+      def call(method, url):
+          req = urllib.request.Request(url, method=method)
+          req.add_header('PRIVATE-TOKEN', TOKEN)
+          try:
+              with urllib.request.urlopen(req) as r:
+                  return r.status, r.read().decode()
+          except urllib.error.HTTPError as e:
+              return e.code, e.read().decode()
+
+      # собрать (key, scope) существующих переменных для наших ключей
+      found, page = [], 1
+      while True:
+          st, body = call('GET', f"{API}/variables?per_page=100&page={page}")
+          if st != 200:
+              print(f"WARN: не удалось прочитать переменные (HTTP {st}): {body[:200]}")
+              break
+          arr = json.loads(body)
+          if not arr:
+              break
+          for v in arr:
+              if v.get('key') in keys:
+                  found.append((v['key'], v.get('environment_scope', '*')))
+          if len(arr) < 100:
+              break
+          page += 1
+
+      if not found:
+          print("  переменных не найдено — пропуск")
+      for key, scope in found:
+          flt = urllib.parse.urlencode({'filter[environment_scope]': scope})
+          st, body = call('DELETE', f"{API}/variables/{key}?{flt}")
+          if st in (200, 204):
+              print(f"  - {key} @ {scope}")
+          elif st == 404:
+              print(f"  = {key} @ {scope} (уже нет)")
+          else:
+              raise SystemExit(f"ERROR delete {key} @ {scope}: HTTP {st} {body[:200]}")
+      PYEOF
+
+      # --- 2) genai-users.yml: удалить ACL-блок пользователя, ветка + MR ---
+      FEATURE_BRANCH="feature/remove-${PROJECT_NAME}"
+      git clone "https://${UNIXREPO_USER}:${MF_BDATA_TUZ_PASSWORD}@cicd-git.megafon.ru/${REDIS_REPO_PATH}.git" redis-repo
+      cd redis-repo
+      DEFAULT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "${REDIS_FALLBACK_BRANCH}")
+      git checkout "${FEATURE_BRANCH}" 2>/dev/null || git checkout -b "${FEATURE_BRANCH}"
+
+      export GEN_USER_VAR="${USER_VAR}" GEN_USERS_FILE="${REDIS_USERS_FILE}"
+      python3 - <<'PYEOF'
+      import os
+      from pathlib import Path
+      from ruamel.yaml import YAML
+
+      user_var = os.environ['GEN_USER_VAR']
+      path = Path(os.environ['GEN_USERS_FILE'])
+      needle = f"${{{user_var}}}"
+
+      yaml = YAML()
+      yaml.preserve_quotes = True
+      yaml.width = 4096
+      yaml.indent(mapping=2, sequence=4, offset=2)
+
+      with path.open() as f:
+          data = yaml.load(f)
+      users = data['.genai-users']['users_config']
+      keep = [item for item in users if needle not in str(item)]
+      removed = len(users) - len(keep)
+      if removed == 0:
+          print(f"{user_var} не найден в genai-users.yml — правку не вносим")
+      else:
+          users[:] = keep
+          with path.open('w') as f:
+              yaml.dump(data, f)
+          print(f"{user_var} удалён из genai-users.yml (блоков убрано: {removed})")
+      PYEOF
+
+      git add "${REDIS_USERS_FILE}"
+      if git diff --cached --quiet; then
+        echo "Нет изменений в ${REDIS_USERS_FILE} — MR не требуется (учётки уже нет)"
+        exit 0
+      fi
+
+      MR_DESC="Удаление Redis-учётки при удалении продукта ${PROJECT_NAME} (группа ${TARGET_GROUP_NAME}). Убран пользователь ${USER_VAR} из genai-users.yml; CI/CD-переменные ${USER_VAR}/${PASS_VAR} удалены во всех окружениях. После слияния deploy_standalone перегенерирует users.acl без этого пользователя."
+      git commit -m "chore: remove redis genai-user ${PROJECT_NAME}"
+      git push \
+        -o merge_request.create \
+        -o merge_request.target="${DEFAULT_BRANCH}" \
+        -o merge_request.title="chore: remove redis genai-user ${PROJECT_NAME}" \
+        -o merge_request.description="${MR_DESC}" \
+        origin "${FEATURE_BRANCH}"
+      echo "OK: ветка ${FEATURE_BRANCH} запушена, MR в ${DEFAULT_BRANCH} открыт"
+
+      # --- 3) Авто-прожатие deploy_standalone (регенерация users.acl без юзера) ---
+      export GEN_TOKEN="${GITLAB_TUZ_TOKEN}" GEN_API="${API}" GEN_REF="${FEATURE_BRANCH}"
+      python3 - <<'PYEOF'
+      import os, json, time, urllib.request, urllib.parse, urllib.error
+      TOKEN = os.environ['GEN_TOKEN']; API = os.environ['GEN_API']; REF = os.environ['GEN_REF']
+      STAGE = 'deploy_standalone'
+
+      def call(method, url):
+          req = urllib.request.Request(url, method=method)
+          req.add_header('PRIVATE-TOKEN', TOKEN)
+          try:
+              with urllib.request.urlopen(req) as r:
+                  return r.status, r.read().decode()
+          except urllib.error.HTTPError as e:
+              return e.code, e.read().decode()
+
+      # 1) дождаться появления пайплайна ветки (push его создаёт)
+      q = urllib.parse.urlencode({'ref': REF, 'order_by': 'id', 'sort': 'desc', 'per_page': 1})
+      pid = None
+      for _ in range(60):
+          st, body = call('GET', f"{API}/pipelines?{q}")
+          arr = json.loads(body) if st == 200 else []
+          if arr:
+              pid = arr[0]['id']
+              break
+          time.sleep(5)
+      if not pid:
+          raise SystemExit("ERROR: пайплайн ветки не появился за ~5 мин")
+      print(f"pipeline #{pid} для {REF}")
+
+      # 2) прожимать manual-джобы стейджа в несколько проходов до терминала
+      played = set()
+      for _ in range(60):                       # ~15 мин макс (sleep 15)
+          st, body = call('GET', f"{API}/pipelines/{pid}/jobs?per_page=100")
+          jobs = json.loads(body) if st == 200 else []
+          stage_jobs = [j for j in jobs if j.get('stage') == STAGE]
+          for j in stage_jobs:
+              if j.get('status') == 'manual' and j['id'] not in played:
+                  ps, pb = call('POST', f"{API}/jobs/{j['id']}/play")
+                  if ps in (200, 201):
+                      played.add(j['id']); print(f"  ▶ play {j['name']} (#{j['id']})")
+                  else:
+                      print(f"  ! {j['name']} (#{j['id']}): HTTP {ps} {pb[:150]}")
+          transient = [j for j in stage_jobs if j.get('status') in ('manual', 'created', 'pending', 'running')]
+          if stage_jobs and not transient:
+              break
+          time.sleep(15)
+
+      st, body = call('GET', f"{API}/pipelines/{pid}/jobs?per_page=100")
+      jobs = json.loads(body) if st == 200 else []
+      summary = [(j['name'], j['status']) for j in jobs if j.get('stage') == STAGE]
+      print("Итог deploy_standalone:", summary)
+      if not summary:
+          print("WARN: в пайплайне ветки не найден стейдж deploy_standalone — проверь конфиг redis-репо")
+      failed = [n for n, s in summary if s == 'failed']
+      if failed:
+          raise SystemExit(f"ERROR: упали джобы deploy_standalone: {failed}")
+      print(f"Прожато джоб: {len(played)}")
+      PYEOF
