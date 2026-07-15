@@ -1632,26 +1632,35 @@ redis-user-delete:
         DEPLOYED=1
       fi
 
-      # --- 2b) оставшаяся create-ветка feature/<product>: почистить, задеплоить, удалить ---
+      # --- 2b) оставшаяся create-ветка feature/<product> ---
       if git ls-remote --exit-code --heads origin "${FEATURE_BRANCH}" >/dev/null 2>&1; then
-        echo "Найдена оставшаяся create-ветка ${FEATURE_BRANCH} — чистим"
-        git fetch -q origin "${FEATURE_BRANCH}"
-        git checkout -q -B "${FEATURE_BRANCH}" "origin/${FEATURE_BRANCH}"
-        redis_remove_entry
-        git add "${REDIS_USERS_FILE}"
-        if git diff --cached --quiet; then
-          echo "  в ${FEATURE_BRANCH} записи ${USER_VAR} нет"
+        if [ "$DEPLOYED" = "1" ]; then
+          # Чистый users.acl уже раскатан через master. Create-ветка устарела —
+          # просто удаляем. КРИТИЧНО: НЕ пушим в неё коммит (пуш триггерит билд, а
+          # мгновенное удаление ветки роняет его 'couldn't find remote ref').
+          # MR ветки закроется автоматически при удалении.
+          echo "Чистое состояние уже раскатано — удаляю устаревшую ${FEATURE_BRANCH} (без пуша/билда)"
+          git push origin --delete "${FEATURE_BRANCH}"
         else
-          git commit -q -m "chore: remove redis genai-user ${PROJECT_NAME}"
-          git push origin "${FEATURE_BRANCH}"
-          # деплой с этой ветки нужен, только если чистый users.acl ещё не раскатан
-          if [ "$DEPLOYED" = "0" ]; then
+          echo "Запись живёт только в ${FEATURE_BRANCH} — чистим, деплоим, ЖДЁМ успех, удаляем"
+          git fetch -q origin "${FEATURE_BRANCH}"
+          git checkout -q -B "${FEATURE_BRANCH}" "origin/${FEATURE_BRANCH}"
+          redis_remove_entry
+          git add "${REDIS_USERS_FILE}"
+          if git diff --cached --quiet; then
+            echo "  записи ${USER_VAR} в ветке нет — просто удаляю (без пуша)"
+            git push origin --delete "${FEATURE_BRANCH}"
+          else
+            git commit -q -m "chore: remove redis genai-user ${PROJECT_NAME}"
+            git push origin "${FEATURE_BRANCH}"
+            # redis_play_deploy СТРОГО ждёт success deploy_standalone (значит билд УЖЕ
+            # прошёл). Только ПОСЛЕ этого удаляем ветку — иначе снесём ref во время
+            # билда. При неуспехе функция падает (set -e) → ветка НЕ удаляется.
             redis_play_deploy "${FEATURE_BRANCH}"
             DEPLOYED=1
+            git push origin --delete "${FEATURE_BRANCH}"
           fi
         fi
-        # ветку удаляем ТОЛЬКО после деплоя; её MR закроется автоматически
-        git push origin --delete "${FEATURE_BRANCH}"
         echo "  OK: create-ветка ${FEATURE_BRANCH} удалена"
       else
         echo "Оставшейся create-ветки ${FEATURE_BRANCH} нет — ок"
