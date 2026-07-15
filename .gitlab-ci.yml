@@ -1156,7 +1156,9 @@ pg-user:
       OUT=$(sshpass -e ssh $SSHOPTS "${PG_SSH_USER}@${PG_SSH_HOST}" 'bash -s' <<REMOTE
       set -e
       echo '$PG_SSH_PASSWORD' | sudo -S -p '' -v 2>/dev/null || true
-      CID=\$(sudo docker ps --filter name='$PG_CONTAINER' --format '{{.ID}}' | head -n1)
+      # Точный выбор сервиса postgres: фильтр по имени матчит и _exporter/_backup,
+      # поэтому берём контейнер, чьё имя == C или C.<цифра> (swarm-таск), не C_*.
+      CID=\$(sudo docker ps --filter name='$PG_CONTAINER' --format '{{.ID}} {{.Names}}' | awk -v c='$PG_CONTAINER' '\$2==c || index(\$2, c".")==1 {print \$1; exit}')
       if [ -z "\$CID" ]; then echo 'ERR_NO_CONTAINER'; exit 3; fi
       sudo docker exec -i "\$CID" psql -U postgres -v ON_ERROR_STOP=1 <<'PSQL'
       \set role '$PG_NAME'
@@ -1719,10 +1721,13 @@ pg-user-delete:
       MATCHES=\$(sudo docker ps --filter name='$PG_CONTAINER' --format '{{.ID}} {{.Names}}')
       echo "containers matching '$PG_CONTAINER':"
       printf '%s\n' "\$MATCHES"
-      CID=\$(printf '%s\n' "\$MATCHES" | awk 'NF{print \$1; exit}')
+      # Точный выбор сервиса postgres (не _exporter/_backup): имя == C или C.<цифра>
+      CID=\$(printf '%s\n' "\$MATCHES" | awk -v c='$PG_CONTAINER' '\$2==c || index(\$2, c".")==1 {print \$1; exit}')
       if [ -z "\$CID" ]; then echo 'ERR_NO_CONTAINER'; exit 3; fi
       echo "using CID=\$CID"
-      OWNER=\$(sudo docker exec -i "\$CID" psql -U postgres -tAc "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname='$PG_NAME'" | tr -d '[:space:]')
+      # ВАЖНО: docker exec БЕЗ -i. С -i docker вычитывает stdin процесса bash -s
+      # (наш remote-скрипт) и сжирает остаток скрипта → он молча обрывается до DROP.
+      OWNER=\$(sudo docker exec "\$CID" psql -U postgres -tAc "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname='$PG_NAME'" | tr -d '[:space:]')
       echo "db_owner=[\$OWNER]"
       if [ -z "\$OWNER" ]; then
         echo 'DB_ABSENT'
@@ -1731,14 +1736,14 @@ pg-user-delete:
       else
         # WITH (FORCE) — PostgreSQL 13+: разрывает активные подключения (pgbouncer/app)
         # и дропает. Без FORCE дроп падает 'database is being accessed by other users'.
-        sudo docker exec -i "\$CID" psql -U postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$PG_NAME\" WITH (FORCE);"
+        sudo docker exec "\$CID" psql -U postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$PG_NAME\" WITH (FORCE);"
         # ПРОВЕРКА: база реально исчезла (не верим на слово)
-        STILL=\$(sudo docker exec -i "\$CID" psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$PG_NAME'" | tr -d '[:space:]')
+        STILL=\$(sudo docker exec "\$CID" psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$PG_NAME'" | tr -d '[:space:]')
         if [ -n "\$STILL" ]; then echo 'ERR_DB_STILL_PRESENT'; exit 5; fi
         echo 'DB_DROPPED'
       fi
-      if sudo docker exec -i "\$CID" psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PG_NAME'" | grep -q 1; then
-        sudo docker exec -i "\$CID" psql -U postgres -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS \"$PG_NAME\";"
+      if sudo docker exec "\$CID" psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PG_NAME'" | grep -q 1; then
+        sudo docker exec "\$CID" psql -U postgres -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS \"$PG_NAME\";"
         echo 'ROLE_DROPPED'
       else
         echo 'ROLE_ABSENT'
